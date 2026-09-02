@@ -26,6 +26,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -139,3 +140,35 @@ def find_habit(habits: list[Habit], name: str) -> Habit | None:
     """
     wanted = name.lower()
     return next((h for h in habits if h["name"].lower() == wanted), None)
+
+
+def current_streak(habit: Habit, today: date | None = None) -> int:
+    """Count the run of consecutive days ``habit`` has been completed.
+
+    A streak survives a not-yet-done today: if yesterday was completed but
+    today has not been *yet*, the streak still stands, because the day is not
+    over. It breaks only once a full day has been missed.
+
+    Args:
+        habit: the habit to measure.
+        today: the day to count back from. Injectable so tests need not
+            freeze the clock.
+
+    Returns:
+        The streak length in days; 0 if the habit is not currently on one.
+    """
+    today = today or date.today()
+    done = {date.fromisoformat(d) for d in habit.get("completions", [])}
+
+    cursor = today
+    if cursor not in done:
+        # Today is still open, so fall back to yesterday before giving up.
+        cursor -= timedelta(days=1)
+        if cursor not in done:
+            return 0
+
+    streak = 0
+    while cursor in done:
+        streak += 1
+        cursor -= timedelta(days=1)
+    return streak

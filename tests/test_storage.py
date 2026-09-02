@@ -8,6 +8,7 @@ against a temporary directory -- see :class:`BehaviourTests`.
 import json
 import tempfile
 import unittest
+from datetime import date, timedelta
 from pathlib import Path
 from unittest import mock
 
@@ -116,6 +117,42 @@ class BehaviourTests(unittest.TestCase):
         storage.save_habits([{"name": "walk", "created": "y", "completions": []}])
         habits = storage.load_habits()
         self.assertEqual([h["name"] for h in habits], ["walk"])
+
+
+class StreakTests(unittest.TestCase):
+    """Pure logic, so no temp directory needed -- just an injected 'today'."""
+
+    TODAY = date(2026, 9, 2)
+
+    def habit(self, *offsets: int) -> dict:
+        """Build a habit completed ``offsets`` days before TODAY."""
+        days = [(self.TODAY - timedelta(days=n)).isoformat() for n in offsets]
+        return {"name": "read", "created": "2026-01-01", "completions": days}
+
+    def test_no_completions_is_no_streak(self) -> None:
+        self.assertEqual(storage.current_streak(self.habit(), self.TODAY), 0)
+
+    def test_done_today_only(self) -> None:
+        self.assertEqual(storage.current_streak(self.habit(0), self.TODAY), 1)
+
+    def test_consecutive_days_accumulate(self) -> None:
+        self.assertEqual(storage.current_streak(self.habit(0, 1, 2), self.TODAY), 3)
+
+    def test_streak_survives_a_today_that_is_not_done_yet(self) -> None:
+        # Yesterday and the day before, nothing today: the day is not over,
+        # so the streak still stands.
+        self.assertEqual(storage.current_streak(self.habit(1, 2), self.TODAY), 2)
+
+    def test_a_fully_missed_day_breaks_the_streak(self) -> None:
+        # Nothing today or yesterday -- the run is over regardless of history.
+        self.assertEqual(storage.current_streak(self.habit(2, 3, 4), self.TODAY), 0)
+
+    def test_only_the_current_run_counts(self) -> None:
+        # Today and yesterday, then a gap at day 2, then more history.
+        self.assertEqual(storage.current_streak(self.habit(0, 1, 3, 4), self.TODAY), 2)
+
+    def test_completions_need_not_be_sorted(self) -> None:
+        self.assertEqual(storage.current_streak(self.habit(2, 0, 1), self.TODAY), 3)
 
 
 if __name__ == "__main__":
