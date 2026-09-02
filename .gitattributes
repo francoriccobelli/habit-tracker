@@ -1,0 +1,36 @@
+# Normalize line endings so a clone on Windows, macOS, or Linux produces the
+# same blobs. Without this, git's autocrlf can rewrite whole files and turn a
+# one-line change into a "every line changed" diff.
+
+# Default: git decides what is text, stores it with LF in the repository, and
+# checks it out with the platform's native endings.
+* text=auto
+
+# Source and config always LF in the working tree too -- Python tooling,
+# linters, and diffs are happier without stray CRs.
+*.py     text eol=lf
+*.toml   text eol=lf
+*.cfg    text eol=lf
+*.ini    text eol=lf
+*.json   text eol=lf
+*.md     text eol=lf
+*.yml    text eol=lf
+*.yaml   text eol=lf
+*.txt    text eol=lf
+.gitignore      text eol=lf
+.gitattributes  text eol=lf
+LICENSE         text eol=lf
+
+# Windows-only scripts genuinely need CRLF.
+*.bat    text eol=crlf
+*.cmd    text eol=crlf
+*.ps1    text eol=crlf
+
+# Binaries: never touch.
+*.png    binary
+*.jpg    binary
+*.gif    binary
+*.ico    binary
+*.pdf    binary
+*.zip    binary
+*.whl    binary
