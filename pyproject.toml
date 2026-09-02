@@ -1,0 +1,37 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "habit-tracker"
+version = "0.1.0"
+description = "A small command-line habit tracker, built while learning Claude Code."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Franco Riccobelli" }]
+keywords = ["cli", "habits", "tracker"]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "Programming Language :: Python :: 3",
+    "Topic :: Utilities",
+]
+
+# Runtime dependencies: none on purpose. The CLI is argparse + json + pathlib,
+# all standard library. Add here only when something really earns its place.
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+habit-tracker = "habit_tracker.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["habit_tracker"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
