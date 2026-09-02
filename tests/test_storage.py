@@ -6,8 +6,10 @@ skipped tests below spell out the behaviour each stub owes us -- unskip them
 as the implementations land.
 """
 
+import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from habit_tracker import storage
 
@@ -32,20 +34,43 @@ class PublicSurfaceTests(unittest.TestCase):
                 self.assertTrue(callable(getattr(storage, name)))
 
 
-@unittest.skip("storage is a skeleton; unskip as each function is implemented")
 class BehaviourTests(unittest.TestCase):
+    """What each storage function owes us.
+
+    Every test here runs against a throwaway directory, never the real
+    ``~/.habit_tracker``. :func:`storage.data_file` reads the module-level
+    ``DATA_FILE`` at call time, so redirecting it in ``setUp`` is enough to
+    keep the developer's own habits safe from the suite.
+
+    The skips are per-test rather than on the class so each one can be turned
+    on as its function lands, instead of all four arriving at once.
+    """
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+
+        self.tmp_path = Path(self._tmp.name) / ".habit_tracker" / "habits.json"
+        patcher = mock.patch.object(storage, "DATA_FILE", self.tmp_path)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    @unittest.skip("unskip when storage.load_habits is implemented")
     def test_load_returns_empty_list_when_file_is_missing(self) -> None:
         self.assertEqual(storage.load_habits(), [])
 
+    @unittest.skip("unskip when storage.save_habits is implemented")
     def test_save_then_load_round_trips(self) -> None:
         habits = [{"name": "read", "created": "2026-09-02", "completions": []}]
         storage.save_habits(habits)
         self.assertEqual(storage.load_habits(), habits)
 
+    @unittest.skip("unskip when storage.find_habit is implemented")
     def test_find_habit_ignores_case(self) -> None:
         habits = [{"name": "Read", "created": "2026-09-02", "completions": []}]
         self.assertIsNotNone(storage.find_habit(habits, "read"))
 
+    @unittest.skip("unskip when storage.find_habit is implemented")
     def test_find_habit_returns_none_when_absent(self) -> None:
         self.assertIsNone(storage.find_habit([], "read"))
 
