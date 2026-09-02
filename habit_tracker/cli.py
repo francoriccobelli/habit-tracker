@@ -15,39 +15,102 @@ Usage::
 from __future__ import annotations
 
 import argparse
+import sys
 from collections.abc import Sequence
+from datetime import date
 
-from habit_tracker import __version__, storage  # noqa: F401  -- TODO: wire up storage
+from habit_tracker import __version__, storage
 
 
 def cmd_add(args: argparse.Namespace) -> int:
     """Create a new habit to track."""
-    # TODO: load habits, reject a duplicate name, append
-    #       {"name": ..., "created": today, "completions": []}, save.
-    print(f"TODO: add habit {args.name!r}")
+    habits = storage.load_habits()
+
+    existing = storage.find_habit(habits, args.name)
+    if existing is not None:
+        # Report the stored spelling, not what was typed -- "Read" and "read"
+        # are the same habit, and seeing the stored one explains the refusal.
+        print(f"error: already tracking {existing['name']!r}", file=sys.stderr)
+        return 1
+
+    habits.append(
+        {
+            "name": args.name,
+            "created": date.today().isoformat(),
+            "completions": [],
+        }
+    )
+    storage.save_habits(habits)
+    print(f"Tracking {args.name!r}.")
     return 0
 
 
 def cmd_list(args: argparse.Namespace) -> int:
     """Show every tracked habit and its current streak."""
-    # TODO: load habits; print a friendly "no habits yet" line when empty,
-    #       otherwise one row per habit with its streak and today's status.
-    print("TODO: list habits")
+    habits = storage.load_habits()
+    if not habits:
+        print("No habits tracked yet. Add one with: habit-tracker add <name>")
+        return 0
+
+    today = date.today()
+    today_iso = today.isoformat()
+    width = max(len(h["name"]) for h in habits)
+
+    for habit in habits:
+        mark = "x" if today_iso in habit.get("completions", []) else " "
+        streak = storage.current_streak(habit, today)
+        days = "day" if streak == 1 else "days"
+        print(f"[{mark}] {habit['name']:<{width}}  {streak} {days}")
     return 0
 
 
 def cmd_done(args: argparse.Namespace) -> int:
     """Mark a habit as completed for a given day (default: today)."""
-    # TODO: load habits, find the habit, append the date to "completions"
-    #       (ignoring a repeat for the same day), save.
-    print(f"TODO: mark {args.name!r} done for {args.date or 'today'}")
+    if args.date is None:
+        when = date.today().isoformat()
+    else:
+        try:
+            # Round-trip through date so "2026-9-2" and "not-a-date" are both
+            # rejected here, rather than becoming a bad entry on disk.
+            when = date.fromisoformat(args.date).isoformat()
+        except ValueError:
+            print(
+                f"error: {args.date!r} is not an ISO date (YYYY-MM-DD)",
+                file=sys.stderr,
+            )
+            return 1
+
+    habits = storage.load_habits()
+    habit = storage.find_habit(habits, args.name)
+    if habit is None:
+        print(f"error: not tracking {args.name!r}", file=sys.stderr)
+        return 1
+
+    completions = habit.setdefault("completions", [])
+    if when in completions:
+        # Marking the same day twice is a no-op, not a failure.
+        print(f"{habit['name']!r} was already done on {when}.")
+        return 0
+
+    completions.append(when)
+    completions.sort()  # keep the file readable when days arrive out of order
+    storage.save_habits(habits)
+    print(f"Marked {habit['name']!r} done for {when}.")
     return 0
 
 
 def cmd_remove(args: argparse.Namespace) -> int:
     """Stop tracking a habit and discard its history."""
-    # TODO: load habits, drop the match, save. Exit 1 if it was not found.
-    print(f"TODO: remove habit {args.name!r}")
+    habits = storage.load_habits()
+    habit = storage.find_habit(habits, args.name)
+    if habit is None:
+        print(f"error: not tracking {args.name!r}", file=sys.stderr)
+        return 1
+
+    habits.remove(habit)
+    storage.save_habits(habits)
+    lost = len(habit.get("completions", []))
+    print(f"Stopped tracking {habit['name']!r} and discarded {lost} completions.")
     return 0
 
 
@@ -109,9 +172,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.print_help()
         return 1
 
-    # TODO: catch storage errors here and turn them into a tidy message
-    #       plus a non-zero exit code, instead of a traceback.
-    return args.func(args)
+    # One place to turn a storage failure into a tidy message. ValueError is
+    # a corrupt or unreadable data file; OSError is a permissions or disk
+    # problem. Either way the user gets a line, not a traceback.
+    try:
+        return args.func(args)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    except OSError as exc:
+        print(f"error: could not use the data file: {exc}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":
