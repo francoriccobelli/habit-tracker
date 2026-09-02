@@ -23,7 +23,9 @@ without breaking old files)::
 
 from __future__ import annotations
 
-import json  # noqa: F401  -- TODO: used once load/save are implemented
+import json
+import os
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -55,8 +57,7 @@ def ensure_data_dir() -> None:
 
     Safe to call repeatedly; it is a no-op when the directory is already there.
     """
-    # TODO: data_file().parent.mkdir(parents=True, exist_ok=True)
-    raise NotImplementedError("storage.ensure_data_dir is not implemented yet")
+    data_file().parent.mkdir(parents=True, exist_ok=True)
 
 
 def load_habits() -> list[Habit]:
@@ -69,12 +70,38 @@ def load_habits() -> list[Habit]:
         ValueError: if the file exists but does not contain valid JSON in the
             expected shape.
     """
-    # TODO:
-    #   1. If data_file() is missing, return [].
-    #   2. json.loads(data_file().read_text(encoding="utf-8")).
-    #   3. Validate "version" and hand off to a migration if it is older.
-    #   4. Return payload["habits"].
-    raise NotImplementedError("storage.load_habits is not implemented yet")
+    path = data_file()
+    if not path.exists():
+        # A fresh install, not an error.
+        return []
+
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        # JSONDecodeError is already a ValueError, but on its own it says
+        # nothing about *which* file is broken.
+        raise ValueError(f"{path} does not contain valid JSON: {exc}") from exc
+
+    if not isinstance(payload, dict):
+        raise ValueError(
+            f"{path} should hold a JSON object, found {type(payload).__name__}"
+        )
+
+    version = payload.get("version")
+    if not isinstance(version, int):
+        raise ValueError(f"{path} has no integer 'version' field")
+    if version > SCHEMA_VERSION:
+        raise ValueError(
+            f"{path} was written by a newer habit-tracker (schema {version}, "
+            f"this build understands {SCHEMA_VERSION}) -- upgrade to read it"
+        )
+    # Older schemas would be migrated here; version 1 is still the only one.
+
+    habits = payload.get("habits")
+    if not isinstance(habits, list):
+        raise ValueError(f"{path} has no 'habits' list")
+
+    return habits
 
 
 def save_habits(habits: list[Habit]) -> None:
@@ -84,12 +111,25 @@ def save_habits(habits: list[Habit]) -> None:
         habits: the complete list of habits. This is a full overwrite, not an
             append -- callers load, mutate, and save the whole collection.
     """
-    # TODO:
-    #   1. ensure_data_dir().
-    #   2. Dump {"version": SCHEMA_VERSION, "habits": habits} with indent=2.
-    #   3. Write to a temp file in the same directory, then os.replace() onto
-    #      data_file() so an interrupted write cannot truncate good data.
-    raise NotImplementedError("storage.save_habits is not implemented yet")
+    ensure_data_dir()
+    path = data_file()
+    payload = {"version": SCHEMA_VERSION, "habits": habits}
+
+    # Write alongside the real file, then swap it in. os.replace is atomic on
+    # POSIX and Windows alike, so an interrupted write leaves the previous file
+    # intact instead of truncating it. The temp file deliberately shares a
+    # directory with the target, so the replace never crosses a filesystem
+    # boundary (where it would stop being atomic).
+    fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=f"{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2)
+            handle.write("\n")
+        os.replace(tmp_name, path)
+    except BaseException:
+        # Never leave a stray .tmp behind -- including on Ctrl-C.
+        Path(tmp_name).unlink(missing_ok=True)
+        raise
 
 
 def find_habit(habits: list[Habit], name: str) -> Habit | None:
@@ -97,5 +137,5 @@ def find_habit(habits: list[Habit], name: str) -> Habit | None:
 
     Matching is case-insensitive: ``Read`` and ``read`` are the same habit.
     """
-    # TODO: next((h for h in habits if h["name"].lower() == name.lower()), None)
-    raise NotImplementedError("storage.find_habit is not implemented yet")
+    wanted = name.lower()
+    return next((h for h in habits if h["name"].lower() == wanted), None)

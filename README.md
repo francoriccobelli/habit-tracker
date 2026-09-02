@@ -2,9 +2,9 @@
 
 A small command-line habit tracker, built while learning Claude Code.
 
-> **Status: skeleton.** The CLI parses and dispatches; the storage layer is
-> stubbed with `NotImplementedError` and TODOs. Commands currently print what
-> they *would* do.
+> **Status: storage works, commands don't yet.** The storage layer is
+> implemented and tested; the CLI parses and dispatches, but the four command
+> handlers still print what they *would* do rather than calling into storage.
 
 ## Requirements
 
@@ -74,11 +74,12 @@ pytest                                    # also works, if you installed [dev]
 
 ## Roadmap
 
-- [ ] Implement `storage.load_habits` / `save_habits` (atomic write)
+- [x] Implement `storage.load_habits` / `save_habits` (atomic write)
 - [ ] Implement the four command handlers
 - [ ] Streak calculation, shown in `list`
 - [ ] Real tests for each command
 - [ ] `--data-file` / `HABIT_TRACKER_DATA` override
+- [ ] Decide whether concurrent writes need locking (load-modify-save is racy)
 
 ## License
 
