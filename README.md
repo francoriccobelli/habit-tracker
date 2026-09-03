@@ -1,8 +1,10 @@
 # habit-tracker
 
+[![CI](https://github.com/francoriccobelli/habit-tracker/actions/workflows/ci.yml/badge.svg)](https://github.com/francoriccobelli/habit-tracker/actions/workflows/ci.yml)
+
 A small command-line habit tracker, built while learning Claude Code.
 
-> **Status: working.** All five commands are implemented and tested against
+> **Status: working.** All six commands are implemented and tested against
 > a real data file. `list` shows current streaks; `stats` shows one habit's
 > full record.
 
@@ -34,9 +36,13 @@ habit-tracker add read           # start tracking a habit
 habit-tracker list               # show habits and current streaks
 habit-tracker done read          # mark today complete
 habit-tracker done read --date 2026-09-01
+habit-tracker undone read        # take back today's completion
 habit-tracker stats read         # one habit's full record
 habit-tracker remove read        # stop tracking, discard history
 ```
+
+`undone` is the inverse of `done` and takes the same `--date`. It's how you fix
+a mistyped completion — `remove` would throw away the habit and all its history.
 
 `list` answers "am I on a roll right now?"; `stats` answers "how am I doing
 overall?" The two differ as soon as a day has been missed:
@@ -118,6 +124,8 @@ pytest                                    # also works, if you installed [dev]
 - [x] Real tests for each command
 - [x] `stats <name>` — totals, completion rate, and longest streak
 - [x] `--data-file` / `HABIT_TRACKER_DATA` override
+- [x] `undone <name>` — take back a day's completion
+- [x] CI on GitHub Actions (Python 3.10–3.14, plus a Windows job)
 - [x] Decide whether concurrent writes need locking — **decided: no.** Writes
       are atomic, but load-modify-save isn't; two overlapping `done` runs can
       lose one. Locking portably is fiddly, and the cost of the rare loss is

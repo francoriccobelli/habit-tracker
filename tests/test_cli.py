@@ -75,6 +75,15 @@ class BuildParserTests(unittest.TestCase):
         args = self.parser.parse_args(["done", "read", "--date", "2026-09-01"])
         self.assertEqual(args.date, "2026-09-01")
 
+    def test_undone_defaults_to_no_explicit_date(self) -> None:
+        args = self.parser.parse_args(["undone", "read"])
+        self.assertIsNone(args.date)
+        self.assertIs(args.func, cli.cmd_undone)
+
+    def test_undone_accepts_an_explicit_date(self) -> None:
+        args = self.parser.parse_args(["undone", "read", "--date", "2026-09-01"])
+        self.assertEqual(args.date, "2026-09-01")
+
     def test_remove_requires_a_name(self) -> None:
         args = self.parser.parse_args(["remove", "read"])
         self.assertEqual(args.name, "read")
@@ -234,6 +243,81 @@ class DoneTests(HandlerTestCase):
         code, _, _ = self.run_cli("done", "read")
         self.assertEqual(code, 0)
         self.assertEqual(len(storage.load_habits()[0]["completions"]), 1)
+
+
+class UndoneTests(HandlerTestCase):
+    """The inverse of `done`, and the only fix for a mistyped completion."""
+
+    def test_undone_removes_today_by_default(self) -> None:
+        self.run_cli("add", "read")
+        self.run_cli("done", "read")
+        code, out, _ = self.run_cli("undone", "read")
+        self.assertEqual(code, 0)
+        self.assertIn("read", out)
+        self.assertEqual(storage.load_habits()[0]["completions"], [])
+
+    def test_undone_removes_an_explicit_date(self) -> None:
+        self.run_cli("add", "read")
+        self.run_cli("done", "read", "--date", "2026-09-01")
+        self.run_cli("done", "read", "--date", "2026-09-02")
+        code, _, _ = self.run_cli("undone", "read", "--date", "2026-09-01")
+        self.assertEqual(code, 0)
+        self.assertEqual(storage.load_habits()[0]["completions"], ["2026-09-02"])
+
+    def test_undone_leaves_neighbouring_days_alone(self) -> None:
+        self.run_cli("add", "read")
+        for day in ("2026-09-01", "2026-09-02", "2026-09-03"):
+            self.run_cli("done", "read", "--date", day)
+        self.run_cli("undone", "read", "--date", "2026-09-02")
+        self.assertEqual(
+            storage.load_habits()[0]["completions"],
+            ["2026-09-01", "2026-09-03"],
+        )
+
+    def test_undone_on_an_unmarked_day_is_a_no_op(self) -> None:
+        self.run_cli("add", "read")
+        code, out, err = self.run_cli("undone", "read", "--date", "2026-09-01")
+        self.assertEqual(code, 0)  # symmetric with done's already-done case
+        self.assertEqual(err, "")
+        self.assertIn("was not marked done", out)
+        self.assertEqual(storage.load_habits()[0]["completions"], [])
+
+    def test_undone_fails_on_an_unknown_habit(self) -> None:
+        code, _, err = self.run_cli("undone", "read")
+        self.assertEqual(code, 1)
+        self.assertIn("not tracking", err)
+
+    def test_undone_rejects_an_unparseable_date(self) -> None:
+        self.run_cli("add", "read")
+        self.run_cli("done", "read", "--date", "2026-09-01")
+        code, _, err = self.run_cli("undone", "read", "--date", "yesterday")
+        self.assertEqual(code, 1)
+        self.assertIn("ISO date", err)
+        # The bad date must not have disturbed what was already recorded.
+        self.assertEqual(storage.load_habits()[0]["completions"], ["2026-09-01"])
+
+    def test_undone_matches_case_insensitively(self) -> None:
+        self.run_cli("add", "Read")
+        self.run_cli("done", "read")
+        code, out, _ = self.run_cli("undone", "read")
+        self.assertEqual(code, 0)
+        self.assertIn("Read", out)  # echoes the stored spelling
+        self.assertEqual(storage.load_habits()[0]["completions"], [])
+
+    def test_undone_clears_a_repeated_day_completely(self) -> None:
+        # A hand-edited file could repeat a date; list.remove would drop one.
+        storage.save_habits(
+            [{"name": "read", "created": "2026-09-01", "completions": ["2026-09-01"] * 3}]
+        )
+        self.run_cli("undone", "read", "--date", "2026-09-01")
+        self.assertEqual(storage.load_habits()[0]["completions"], [])
+
+    def test_done_then_undone_round_trips(self) -> None:
+        self.run_cli("add", "read")
+        before = storage.load_habits()[0]["completions"]
+        self.run_cli("done", "read", "--date", "2026-09-01")
+        self.run_cli("undone", "read", "--date", "2026-09-01")
+        self.assertEqual(storage.load_habits()[0]["completions"], before)
 
 
 class RemoveTests(HandlerTestCase):

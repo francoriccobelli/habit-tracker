@@ -9,6 +9,7 @@ Usage::
     habit-tracker add read
     habit-tracker list
     habit-tracker done read
+    habit-tracker undone read --date 2026-09-01
     habit-tracker stats read
     habit-tracker remove read
     habit-tracker --data-file ./demo.json list
@@ -32,6 +33,26 @@ def _plural(count: int, singular: str, plural: str | None = None) -> str:
     never prints.
     """
     return f"{count} {singular if count == 1 else plural or singular + 's'}"
+
+
+def _iso_day(raw: str | None) -> str:
+    """Normalise an optional ``--date`` to an ISO day, defaulting to today.
+
+    Round-tripping through :class:`date` rejects both "2026-9-2" and
+    "not-a-date" here, rather than letting either become a bad entry on disk.
+
+    Raises:
+        ValueError: carrying a user-facing message. ``main()`` already renders
+            a ValueError as ``error: <message>`` and exits 1, so handlers need
+            no try/except of their own.
+    """
+    if raw is None:
+        return date.today().isoformat()
+
+    try:
+        return date.fromisoformat(raw).isoformat()
+    except ValueError:
+        raise ValueError(f"{raw!r} is not an ISO date (YYYY-MM-DD)") from None
 
 
 def cmd_add(args: argparse.Namespace) -> int:
@@ -111,19 +132,7 @@ def cmd_stats(args: argparse.Namespace) -> int:
 
 def cmd_done(args: argparse.Namespace) -> int:
     """Mark a habit as completed for a given day (default: today)."""
-    if args.date is None:
-        when = date.today().isoformat()
-    else:
-        try:
-            # Round-trip through date so "2026-9-2" and "not-a-date" are both
-            # rejected here, rather than becoming a bad entry on disk.
-            when = date.fromisoformat(args.date).isoformat()
-        except ValueError:
-            print(
-                f"error: {args.date!r} is not an ISO date (YYYY-MM-DD)",
-                file=sys.stderr,
-            )
-            return 1
+    when = _iso_day(args.date)
 
     habits = storage.load_habits()
     habit = storage.find_habit(habits, args.name)
@@ -141,6 +150,34 @@ def cmd_done(args: argparse.Namespace) -> int:
     completions.sort()  # keep the file readable when days arrive out of order
     storage.save_habits(habits)
     print(f"Marked {habit['name']!r} done for {when}.")
+    return 0
+
+
+def cmd_undone(args: argparse.Namespace) -> int:
+    """Take back one day's completion (default: today).
+
+    The inverse of :func:`cmd_done`, and the only way to correct a mistyped
+    ``done`` -- ``remove`` would discard the habit and its whole history.
+    """
+    when = _iso_day(args.date)
+
+    habits = storage.load_habits()
+    habit = storage.find_habit(habits, args.name)
+    if habit is None:
+        print(f"error: not tracking {args.name!r}", file=sys.stderr)
+        return 1
+
+    completions = habit.get("completions", [])
+    if when not in completions:
+        # Symmetric with done's already-done case: a no-op, not a failure.
+        print(f"{habit['name']!r} was not marked done on {when}.")
+        return 0
+
+    # Filter rather than list.remove, which would drop only the first of a
+    # repeated day in a hand-edited file.
+    habit["completions"] = [day for day in completions if day != when]
+    storage.save_habits(habits)
+    print(f"Unmarked {habit['name']!r} for {when}.")
     return 0
 
 
@@ -204,6 +241,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="ISO date (YYYY-MM-DD) to mark complete; defaults to today",
     )
     done.set_defaults(func=cmd_done)
+
+    undone = subparsers.add_parser("undone", help="take back a day's completion")
+    undone.add_argument("name", help="name of the habit")
+    undone.add_argument(
+        "--date",
+        default=None,
+        help="ISO date (YYYY-MM-DD) to un-mark; defaults to today",
+    )
+    undone.set_defaults(func=cmd_undone)
 
     remove = subparsers.add_parser("remove", help="stop tracking a habit")
     remove.add_argument("name", help="name of the habit")

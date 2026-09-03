@@ -1,0 +1,101 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+# A new push supersedes an in-flight run on the same ref.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: ${{ matrix.os }} / Python ${{ matrix.python-version }}
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      # One version failing should not hide the state of the others.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+        include:
+          # The OS this was developed on. storage.py leans on os.replace being
+          # atomic and on Path.home(), which behave differently under Windows.
+          - os: windows-latest
+            python-version: "3.12"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      # Deliberately before any install: the suite is stdlib-only and the
+      # README promises as much, so this is what keeps that promise honest.
+      - name: Run the suite with nothing installed
+        run: python -m unittest discover -s tests -v
+
+      - name: Install with dev extras
+        run: python -m pip install -e ".[dev]"
+
+      - name: Run the suite under pytest
+        run: python -m pytest
+
+      # The hazard the --data-file work was designed around: data_file() reads
+      # this variable ahead of DATA_FILE, so a suite that failed to neutralise
+      # it would read and write at the path below instead of its temp dir.
+      - name: Run the suite with HABIT_TRACKER_DATA set
+        env:
+          HABIT_TRACKER_DATA: ${{ runner.temp }}/canary.json
+        run: python -m unittest discover -s tests
+
+      - name: The canary must not have been written
+        shell: python
+        env:
+          CANARY: ${{ runner.temp }}/canary.json
+        run: |
+          import os
+          import pathlib
+          import sys
+
+          canary = pathlib.Path(os.environ["CANARY"])
+          if canary.exists():
+              sys.exit(f"test isolation leaked: the suite wrote to {canary}")
+          print(f"{canary} untouched, as required")
+
+      # Exercises the console script from pyproject, which none of the unit
+      # tests reach -- they call cli.main() directly.
+      - name: Smoke-test the installed command
+        shell: python
+        run: |
+          import pathlib
+          import subprocess
+          import tempfile
+
+          data = pathlib.Path(tempfile.mkdtemp()) / "habits.json"
+
+          def run(*args):
+              done = subprocess.run(
+                  ["habit-tracker", "--data-file", str(data), *args],
+                  capture_output=True,
+                  text=True,
+                  check=True,
+              )
+              print(f"$ habit-tracker {' '.join(args)}\n{done.stdout}", end="")
+              return done.stdout
+
+          run("add", "read")
+          run("done", "read")
+          assert "read" in run("list"), "list should show the habit"
+          assert "1 day" in run("stats", "read"), "stats should report a streak"
+          run("undone", "read")
+          assert "0 days" in run("list"), "undone should clear the streak"
+          run("remove", "read")
+          assert "No habits tracked yet" in run("list"), "remove should empty it"

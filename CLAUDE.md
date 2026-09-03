@@ -4,10 +4,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project state
 
-All five commands (`add`, `list`, `done`, `remove`, `stats`) work end to end
-and are tested, and the data file can be redirected with `--data-file` or
-`HABIT_TRACKER_DATA`. Every roadmap item in the README is now closed. New work
-should add an item there and tick it as it lands.
+All six commands (`add`, `list`, `done`, `undone`, `remove`, `stats`) work end
+to end and are tested, and the data file can be redirected with `--data-file`
+or `HABIT_TRACKER_DATA`. Every roadmap item in the README is now closed. New
+work should add an item there and tick it as it lands.
+
+CI lives in `.github/workflows/ci.yml` (Python 3.10–3.14 on Ubuntu, plus a
+Windows job). It runs the suite twice — once with nothing installed, to keep
+the stdlib-only promise honest — and re-runs it with `HABIT_TRACKER_DATA` set,
+failing if the suite writes to that path. **Note:** as of this writing the
+workflow has never actually run; `origin/main` is behind and nothing has been
+pushed.
 
 **Known limitation, accepted and closed: no write locking.** `save_habits` is
 atomic — it writes a temp file and `os.replace`s it, so an interrupted write
@@ -62,8 +69,11 @@ Conventions that follow from that split:
   `tracked_since` take data and return data — they touch neither the disk nor
   stdout. They sit in
   `storage.py` because `cli.py` is explicitly barred from holding business
-  logic. Put the next such helper there too. The exception is *formatting*:
-  `_plural` lives in `cli.py`, because `storage.py` never prints.
+  logic. Put the next such helper there too. The exceptions are the two ends of
+  the CLI's own I/O: `_plural` (formatting) and `_iso_day` (parsing `--date`)
+  live in `cli.py`, because `storage.py` neither prints nor reads argv.
+  `_iso_day` raises `ValueError` with a user-facing message rather than
+  printing, letting `main()`'s existing handler render it.
 - **`build_parser()` is split out from `main()`** so tests can inspect the
   parser and check `--help` without running a command.
 - **`data_file()` is indirection on purpose.** Nothing hard-codes `DATA_FILE`.
