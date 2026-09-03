@@ -2,8 +2,9 @@
 
 A small command-line habit tracker, built while learning Claude Code.
 
-> **Status: working.** All four commands are implemented and tested against
-> a real data file. Streaks are shown in `list`.
+> **Status: working.** All five commands are implemented and tested against
+> a real data file. `list` shows current streaks; `stats` shows one habit's
+> full record.
 
 ## Requirements
 
@@ -30,11 +31,30 @@ python -m habit_tracker.cli --help
 
 ```bash
 habit-tracker add read           # start tracking a habit
-habit-tracker list               # show habits and streaks
+habit-tracker list               # show habits and current streaks
 habit-tracker done read          # mark today complete
 habit-tracker done read --date 2026-09-01
+habit-tracker stats read         # one habit's full record
 habit-tracker remove read        # stop tracking, discard history
 ```
+
+`list` answers "am I on a roll right now?"; `stats` answers "how am I doing
+overall?" The two differ as soon as a day has been missed:
+
+```
+$ habit-tracker list
+[x] read  1 day
+
+$ habit-tracker stats read
+read
+  Tracking since   2026-08-31  (4 days)
+  Completed        3 days  (75%)
+  Current streak   1 day
+  Longest streak   2 days
+```
+
+Done today, but yesterday was missed — so the current run is 1 day while the
+best run, two days back, was 2.
 
 ## Data
 
@@ -77,6 +97,7 @@ pytest                                    # also works, if you installed [dev]
 - [x] Implement the four command handlers
 - [x] Streak calculation, shown in `list`
 - [x] Real tests for each command
+- [x] `stats <name>` — totals, completion rate, and longest streak
 - [ ] `--data-file` / `HABIT_TRACKER_DATA` override
 - [ ] Decide whether concurrent writes need locking (load-modify-save is racy)
 

@@ -5,10 +5,11 @@ Behavioural tests arrive with the implementations.
 """
 
 import io
+import re
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from unittest import mock
 
@@ -66,6 +67,15 @@ class BuildParserTests(unittest.TestCase):
         args = self.parser.parse_args(["remove", "read"])
         self.assertEqual(args.name, "read")
         self.assertIs(args.func, cli.cmd_remove)
+
+    def test_stats_requires_a_name(self) -> None:
+        args = self.parser.parse_args(["stats", "read"])
+        self.assertEqual(args.name, "read")
+        self.assertIs(args.func, cli.cmd_stats)
+
+    def test_stats_without_a_name_is_rejected(self) -> None:
+        with self.assertRaises(SystemExit), redirect_stderr(io.StringIO()):
+            self.parser.parse_args(["stats"])
 
     def test_unknown_command_exits(self) -> None:
         with self.assertRaises(SystemExit), redirect_stdout(io.StringIO()):
@@ -227,6 +237,122 @@ class RemoveTests(HandlerTestCase):
         code, _, _ = self.run_cli("remove", "read")
         self.assertEqual(code, 0)
         self.assertEqual(storage.load_habits(), [])
+
+    def test_remove_says_one_completion_in_the_singular(self) -> None:
+        # Regression: this read "discarded 1 completions" before _plural.
+        self.run_cli("add", "read")
+        self.run_cli("done", "read", "--date", "2026-09-01")
+        _, out, _ = self.run_cli("remove", "read")
+        self.assertIn("1 completion.", out)
+        self.assertNotIn("1 completions", out)
+
+
+class PluralTests(unittest.TestCase):
+    """The helper behind every count the CLI prints."""
+
+    def test_one_is_singular(self) -> None:
+        self.assertEqual(cli._plural(1, "day"), "1 day")
+
+    def test_everything_else_is_plural(self) -> None:
+        self.assertEqual(cli._plural(0, "day"), "0 days")
+        self.assertEqual(cli._plural(2, "day"), "2 days")
+
+    def test_an_irregular_plural_can_be_given(self) -> None:
+        self.assertEqual(cli._plural(2, "entry", "entries"), "2 entries")
+
+
+class StatsTests(HandlerTestCase):
+    def seed(self, created: str, *completions: str) -> None:
+        """Write one habit straight to disk, bypassing add/done.
+
+        Lets a test describe an exact history -- including the backdated and
+        future shapes the commands would take several calls to build.
+        """
+        storage.save_habits(
+            [{"name": "read", "created": created, "completions": list(completions)}]
+        )
+
+    def rate(self, out: str) -> int:
+        """Pull the percentage off the Completed line."""
+        match = re.search(r"\((\d+)%\)", out)
+        self.assertIsNotNone(match, f"no percentage found in:\n{out}")
+        return int(match.group(1))
+
+    def test_stats_fails_on_an_unknown_habit(self) -> None:
+        code, _, err = self.run_cli("stats", "read")
+        self.assertEqual(code, 1)
+        self.assertIn("not tracking", err)
+
+    def test_stats_reports_every_field(self) -> None:
+        today = date.today().isoformat()
+        self.seed(today, today)
+        code, out, _ = self.run_cli("stats", "read")
+        self.assertEqual(code, 0)
+        self.assertIn("read", out)
+        self.assertIn(today, out)
+        for label in ("Tracking since", "Completed", "Current streak", "Longest streak"):
+            with self.subTest(label=label):
+                self.assertIn(label, out)
+
+    def test_stats_uses_the_singular_for_one(self) -> None:
+        today = date.today().isoformat()
+        self.seed(today, today)
+        _, out, _ = self.run_cli("stats", "read")
+        self.assertIn("1 day", out)
+        self.assertNotIn("1 days", out)
+
+    def test_stats_echoes_the_stored_spelling(self) -> None:
+        self.run_cli("add", "Read")
+        code, out, _ = self.run_cli("stats", "read")
+        self.assertEqual(code, 0)
+        self.assertIn("Read", out)
+
+    def test_a_backdated_completion_does_not_exceed_full_marks(self) -> None:
+        # The real data file's shape: created today, but completed two days
+        # ago. A naive completions/(today - created) reads 200% here.
+        today = date.today()
+        self.seed(today.isoformat(), (today - timedelta(days=2)).isoformat())
+        _, out, _ = self.run_cli("stats", "read")
+        self.assertLessEqual(self.rate(out), 100)
+
+    def test_the_since_date_matches_the_day_count(self) -> None:
+        # Created today but completed two days ago. The header has to read
+        # "since <two days ago>  (3 days)" -- pairing the *created* date with
+        # a 3-day span would have the line contradict itself.
+        today = date.today()
+        start = today - timedelta(days=2)
+        self.seed(today.isoformat(), start.isoformat())
+        _, out, _ = self.run_cli("stats", "read")
+        self.assertIn(f"Tracking since   {start.isoformat()}  (3 days)", out)
+
+    def test_a_future_completion_does_not_exceed_full_marks(self) -> None:
+        today = date.today()
+        self.seed(today.isoformat(), (today + timedelta(days=30)).isoformat())
+        _, out, _ = self.run_cli("stats", "read")
+        self.assertLessEqual(self.rate(out), 100)
+
+    def test_stats_reports_a_finished_run_as_the_longest(self) -> None:
+        # Today, a gap, then three consecutive days: the current streak is 1
+        # but the best run was 3. This is what `list` alone cannot show.
+        today = date.today()
+        days = [(today - timedelta(days=n)).isoformat() for n in (0, 2, 3, 4)]
+        self.seed(days[-1], *days)
+        _, out, _ = self.run_cli("stats", "read")
+        self.assertIn("Current streak   1 day", out)
+        self.assertIn("Longest streak   3 days", out)
+
+    def test_stats_leaves_the_data_file_untouched(self) -> None:
+        self.run_cli("add", "read")
+        before = self.tmp_path.read_bytes()
+        self.run_cli("stats", "read")
+        self.assertEqual(self.tmp_path.read_bytes(), before)
+
+    def test_stats_reports_a_corrupt_file_without_a_traceback(self) -> None:
+        self.tmp_path.parent.mkdir(parents=True)
+        self.tmp_path.write_text("{not json", encoding="utf-8")
+        code, _, err = self.run_cli("stats", "read")
+        self.assertEqual(code, 1)
+        self.assertIn("error:", err)
 
 
 if __name__ == "__main__":

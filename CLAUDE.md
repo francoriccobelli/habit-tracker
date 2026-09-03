@@ -4,10 +4,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project state
 
-All four commands work end to end and are tested. What remains is in the
-README's Roadmap section, which should be updated as items land — chiefly the
-`--data-file` / `HABIT_TRACKER_DATA` override, and a decision on whether
-concurrent writes need locking.
+All five commands (`add`, `list`, `done`, `remove`, `stats`) work end to end
+and are tested. What remains is in the README's Roadmap section, which should
+be updated as items land — chiefly the `--data-file` / `HABIT_TRACKER_DATA`
+override, and a decision on whether concurrent writes need locking.
 
 **Known limitation:** `save_habits` is atomic, but the load-modify-save cycle
 in each handler is not. Two `habit-tracker done` runs racing each other can
@@ -47,10 +47,13 @@ Conventions that follow from that split:
   that converts a `ValueError` (corrupt data file) or `OSError` (permissions,
   disk) into a one-line message and exit 1, so no handler needs its own
   try/except and no user sees a traceback.
-- **Pure logic lives in `storage.py`, not `cli.py`.** `find_habit` and
-  `current_streak` take data and return data — they touch neither the disk nor
-  stdout. They sit in `storage.py` because `cli.py` is explicitly barred from
-  holding business logic. Put the next such helper there too.
+- **Pure logic lives in `storage.py`, not `cli.py`.** `find_habit`,
+  `current_streak`, `longest_streak`, `completed_days`, `tracked_days` and
+  `tracked_since` take data and return data — they touch neither the disk nor
+  stdout. They sit in
+  `storage.py` because `cli.py` is explicitly barred from holding business
+  logic. Put the next such helper there too. The exception is *formatting*:
+  `_plural` lives in `cli.py`, because `storage.py` never prints.
 - **`build_parser()` is split out from `main()`** so tests can inspect the
   parser and check `--help` without running a command.
 - **`data_file()` is indirection on purpose.** Nothing hard-codes `DATA_FILE`;

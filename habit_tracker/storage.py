@@ -172,3 +172,80 @@ def current_streak(habit: Habit, today: date | None = None) -> int:
         streak += 1
         cursor -= timedelta(days=1)
     return streak
+
+
+def longest_streak(habit: Habit) -> int:
+    """Measure the longest unbroken run of completed days in the history.
+
+    Unlike :func:`current_streak`, which counts back from today, this looks at
+    the whole record -- so it needs no notion of "now" and never shrinks as
+    time passes.
+
+    Returns:
+        The longest run in days; 0 if the habit has never been completed.
+    """
+    done = sorted({date.fromisoformat(d) for d in habit.get("completions", [])})
+    if not done:
+        return 0
+
+    best = run = 1
+    for previous, current in zip(done, done[1:]):
+        run = run + 1 if current - previous == timedelta(days=1) else 1
+        best = max(best, run)
+    return best
+
+
+def completed_days(habit: Habit) -> int:
+    """Count the distinct days ``habit`` has been completed.
+
+    Distinct rather than ``len(completions)`` so a hand-edited file that
+    repeats a date cannot report more completions than days tracked.
+    """
+    return len({date.fromisoformat(d) for d in habit.get("completions", [])})
+
+
+def _window(habit: Habit, today: date) -> tuple[date, date]:
+    """The span a habit is measured over, as inclusive ``(start, end)`` dates.
+
+    The window stretches to cover everything rather than simply running from
+    ``created`` to today: ``done --date`` accepts any ISO date, so a completion
+    can predate the habit (backdating) or fall after today. Spanning both keeps
+    every completion inside the window, which is what stops
+    ``completed_days / tracked_days`` from exceeding 1.
+    """
+    done = {date.fromisoformat(d) for d in habit.get("completions", [])}
+
+    created = habit.get("created")
+    starts = done | ({date.fromisoformat(created)} if created else set())
+    if not starts:
+        # No created date and no history -- today is all we can claim.
+        return today, today
+
+    start = min(starts)
+    # `start` is in the running for `end` too, so a habit somehow created in
+    # the future still yields a positive span rather than a negative one.
+    return start, max({today, start} | done)
+
+
+def tracked_since(habit: Habit, today: date | None = None) -> date:
+    """The first day ``habit`` is measured from.
+
+    Usually its ``created`` date, but an earlier backdated completion wins --
+    otherwise the date would contradict the span :func:`tracked_days` reports.
+    """
+    return _window(habit, today or date.today())[0]
+
+
+def tracked_days(habit: Habit, today: date | None = None) -> int:
+    """Count the days ``habit`` has been under observation, both ends included.
+
+    Args:
+        habit: the habit to measure.
+        today: the day the window ends on, unless a later completion pushes it
+            out. Injectable so tests need not freeze the clock.
+
+    Returns:
+        The window length in days; always at least 1.
+    """
+    start, end = _window(habit, today or date.today())
+    return (end - start).days + 1

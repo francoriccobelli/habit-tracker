@@ -30,7 +30,17 @@ class DataLocationTests(unittest.TestCase):
 
 class PublicSurfaceTests(unittest.TestCase):
     def test_expected_functions_are_callable(self) -> None:
-        for name in ("ensure_data_dir", "load_habits", "save_habits", "find_habit"):
+        for name in (
+            "ensure_data_dir",
+            "load_habits",
+            "save_habits",
+            "find_habit",
+            "current_streak",
+            "longest_streak",
+            "completed_days",
+            "tracked_days",
+            "tracked_since",
+        ):
             with self.subTest(function=name):
                 self.assertTrue(callable(getattr(storage, name)))
 
@@ -153,6 +163,151 @@ class StreakTests(unittest.TestCase):
 
     def test_completions_need_not_be_sorted(self) -> None:
         self.assertEqual(storage.current_streak(self.habit(2, 0, 1), self.TODAY), 3)
+
+
+class LongestStreakTests(unittest.TestCase):
+    """Also pure logic -- and, unlike current_streak, no 'today' at all."""
+
+    TODAY = date(2026, 9, 2)
+
+    def habit(self, *offsets: int) -> dict:
+        """Build a habit completed ``offsets`` days before TODAY."""
+        days = [(self.TODAY - timedelta(days=n)).isoformat() for n in offsets]
+        return {"name": "read", "created": "2026-01-01", "completions": days}
+
+    def test_no_completions_is_no_streak(self) -> None:
+        self.assertEqual(storage.longest_streak(self.habit()), 0)
+
+    def test_a_single_day_is_a_streak_of_one(self) -> None:
+        self.assertEqual(storage.longest_streak(self.habit(0)), 1)
+
+    def test_consecutive_days_accumulate(self) -> None:
+        self.assertEqual(storage.longest_streak(self.habit(0, 1, 2)), 3)
+
+    def test_a_gap_splits_two_runs(self) -> None:
+        # Today, then a gap, then three consecutive days.
+        self.assertEqual(storage.longest_streak(self.habit(0, 2, 3, 4)), 3)
+
+    def test_finds_a_past_run_longer_than_the_current_one(self) -> None:
+        # The case current_streak cannot see: the best run is over.
+        habit = self.habit(0, 2, 3, 4)
+        self.assertEqual(storage.current_streak(habit, self.TODAY), 1)
+        self.assertEqual(storage.longest_streak(habit), 3)
+
+    def test_completions_need_not_be_sorted(self) -> None:
+        self.assertEqual(storage.longest_streak(self.habit(2, 0, 1)), 3)
+
+    def test_repeated_dates_do_not_inflate_the_run(self) -> None:
+        habit = {"name": "read", "created": "x", "completions": ["2026-09-01"] * 3}
+        self.assertEqual(storage.longest_streak(habit), 1)
+
+    def test_never_shorter_than_the_current_streak(self) -> None:
+        for offsets in ((), (0,), (0, 1, 2), (1, 2), (0, 2, 3, 4), (2, 0, 1)):
+            with self.subTest(offsets=offsets):
+                habit = self.habit(*offsets)
+                self.assertGreaterEqual(
+                    storage.longest_streak(habit),
+                    storage.current_streak(habit, self.TODAY),
+                )
+
+
+class CompletedDaysTests(unittest.TestCase):
+    def test_no_completions(self) -> None:
+        self.assertEqual(storage.completed_days({"name": "read"}), 0)
+
+    def test_counts_each_day(self) -> None:
+        habit = {"completions": ["2026-09-01", "2026-09-02", "2026-09-04"]}
+        self.assertEqual(storage.completed_days(habit), 3)
+
+    def test_counts_distinct_days_only(self) -> None:
+        habit = {"completions": ["2026-09-01", "2026-09-01", "2026-09-02"]}
+        self.assertEqual(storage.completed_days(habit), 2)
+
+
+class TrackedDaysTests(unittest.TestCase):
+    """The window a completion rate is measured against.
+
+    It has to span every completion, because ``done --date`` will happily
+    record a day before the habit existed or after today.
+    """
+
+    TODAY = date(2026, 9, 3)
+
+    def test_created_today_with_no_history_is_one_day(self) -> None:
+        habit = {"created": "2026-09-03", "completions": []}
+        self.assertEqual(storage.tracked_days(habit, self.TODAY), 1)
+
+    def test_counts_from_created_inclusive(self) -> None:
+        habit = {"created": "2026-09-01", "completions": []}
+        self.assertEqual(storage.tracked_days(habit, self.TODAY), 3)
+
+    def test_a_backdated_completion_widens_the_window(self) -> None:
+        # Exactly the shape of the real data file: created today, but a
+        # completion recorded for two days earlier.
+        habit = {"created": "2026-09-03", "completions": ["2026-09-01"]}
+        self.assertEqual(storage.tracked_days(habit, self.TODAY), 3)
+
+    def test_a_future_completion_widens_the_window(self) -> None:
+        habit = {"created": "2026-09-01", "completions": ["2026-09-05"]}
+        self.assertEqual(storage.tracked_days(habit, self.TODAY), 5)
+
+    def test_falls_back_to_the_first_completion_without_created(self) -> None:
+        habit = {"completions": ["2026-09-02", "2026-09-03"]}
+        self.assertEqual(storage.tracked_days(habit, self.TODAY), 2)
+
+    def test_nothing_at_all_is_still_one_day(self) -> None:
+        self.assertEqual(storage.tracked_days({"name": "read"}, self.TODAY), 1)
+
+    def test_never_exceeded_by_the_completed_count(self) -> None:
+        # The invariant the rate depends on: it can never read above 100%.
+        habits = [
+            {"created": "2026-09-03", "completions": ["2026-09-01"]},
+            {"created": "2026-09-01", "completions": ["2026-09-05"]},
+            {"created": "2026-09-01", "completions": []},
+            {"completions": ["2026-09-02", "2026-09-02"]},
+        ]
+        for habit in habits:
+            with self.subTest(habit=habit):
+                self.assertLessEqual(
+                    storage.completed_days(habit),
+                    storage.tracked_days(habit, self.TODAY),
+                )
+
+
+class TrackedSinceTests(unittest.TestCase):
+    """The start date must agree with the span tracked_days reports."""
+
+    TODAY = date(2026, 9, 3)
+
+    def test_usually_the_created_date(self) -> None:
+        habit = {"created": "2026-09-01", "completions": ["2026-09-02"]}
+        self.assertEqual(storage.tracked_since(habit, self.TODAY), date(2026, 9, 1))
+
+    def test_an_earlier_backdated_completion_wins(self) -> None:
+        habit = {"created": "2026-09-03", "completions": ["2026-09-01"]}
+        self.assertEqual(storage.tracked_since(habit, self.TODAY), date(2026, 9, 1))
+
+    def test_falls_back_to_today_with_nothing_recorded(self) -> None:
+        self.assertEqual(storage.tracked_since({}, self.TODAY), self.TODAY)
+
+    def test_the_window_contains_today_and_every_completion(self) -> None:
+        # What "Tracking since <date>  (<n> days)" promises the reader: the
+        # span really does start on that date and cover everything recorded.
+        habits = [
+            {"created": "2026-09-03", "completions": ["2026-09-01"]},
+            {"created": "2026-09-01", "completions": ["2026-09-05"]},
+            {"created": "2026-09-01", "completions": []},
+            {"completions": ["2026-09-02"]},
+            {},
+        ]
+        for habit in habits:
+            with self.subTest(habit=habit):
+                start = storage.tracked_since(habit, self.TODAY)
+                end = start + timedelta(days=storage.tracked_days(habit, self.TODAY) - 1)
+                self.assertLessEqual(start, self.TODAY)
+                self.assertGreaterEqual(end, self.TODAY)
+                for iso in habit.get("completions", []):
+                    self.assertTrue(start <= date.fromisoformat(iso) <= end)
 
 
 if __name__ == "__main__":

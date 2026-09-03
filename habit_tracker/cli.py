@@ -9,6 +9,7 @@ Usage::
     habit-tracker add read
     habit-tracker list
     habit-tracker done read
+    habit-tracker stats read
     habit-tracker remove read
 """
 
@@ -20,6 +21,16 @@ from collections.abc import Sequence
 from datetime import date
 
 from habit_tracker import __version__, storage
+
+
+def _plural(count: int, singular: str, plural: str | None = None) -> str:
+    """Render ``count`` with the matching form of its noun.
+
+    ``_plural(1, "day")`` gives ``"1 day"``, ``_plural(2, "day")`` gives
+    ``"2 days"``. Formatting, so it lives here rather than in storage -- which
+    never prints.
+    """
+    return f"{count} {singular if count == 1 else plural or singular + 's'}"
 
 
 def cmd_add(args: argparse.Namespace) -> int:
@@ -59,8 +70,37 @@ def cmd_list(args: argparse.Namespace) -> int:
     for habit in habits:
         mark = "x" if today_iso in habit.get("completions", []) else " "
         streak = storage.current_streak(habit, today)
-        days = "day" if streak == 1 else "days"
-        print(f"[{mark}] {habit['name']:<{width}}  {streak} {days}")
+        print(f"[{mark}] {habit['name']:<{width}}  {_plural(streak, 'day')}")
+    return 0
+
+
+def cmd_stats(args: argparse.Namespace) -> int:
+    """Show one habit's whole record: how long it has run, totals, streaks.
+
+    Where ``list`` answers "am I on a roll right now?", this answers "how am I
+    doing overall?" -- the two genuinely differ once a day has been missed.
+    """
+    habits = storage.load_habits()
+    habit = storage.find_habit(habits, args.name)
+    if habit is None:
+        print(f"error: not tracking {args.name!r}", file=sys.stderr)
+        return 1
+
+    today = date.today()
+    tracked = storage.tracked_days(habit, today)
+    completed = storage.completed_days(habit)
+
+    # tracked_days never returns 0, so the rate cannot divide by zero -- and
+    # its window covers every completion, so it cannot exceed 100%. The date
+    # comes from the same window as the count, so the two always agree.
+    print(habit["name"])
+    print(
+        f"  Tracking since   {storage.tracked_since(habit, today).isoformat()}"
+        f"  ({_plural(tracked, 'day')})"
+    )
+    print(f"  Completed        {_plural(completed, 'day')}  ({completed / tracked:.0%})")
+    print(f"  Current streak   {_plural(storage.current_streak(habit, today), 'day')}")
+    print(f"  Longest streak   {_plural(storage.longest_streak(habit), 'day')}")
     return 0
 
 
@@ -109,8 +149,11 @@ def cmd_remove(args: argparse.Namespace) -> int:
 
     habits.remove(habit)
     storage.save_habits(habits)
-    lost = len(habit.get("completions", []))
-    print(f"Stopped tracking {habit['name']!r} and discarded {lost} completions.")
+    lost = storage.completed_days(habit)
+    print(
+        f"Stopped tracking {habit['name']!r} and "
+        f"discarded {_plural(lost, 'completion')}."
+    )
     return 0
 
 
@@ -151,6 +194,10 @@ def build_parser() -> argparse.ArgumentParser:
     remove = subparsers.add_parser("remove", help="stop tracking a habit")
     remove.add_argument("name", help="name of the habit")
     remove.set_defaults(func=cmd_remove)
+
+    stats = subparsers.add_parser("stats", help="show one habit's full record")
+    stats.add_argument("name", help="name of the habit")
+    stats.set_defaults(func=cmd_stats)
 
     return parser
 
