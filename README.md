@@ -118,7 +118,10 @@ pytest                                    # also works, if you installed [dev]
 - [x] Real tests for each command
 - [x] `stats <name>` — totals, completion rate, and longest streak
 - [x] `--data-file` / `HABIT_TRACKER_DATA` override
-- [ ] Decide whether concurrent writes need locking (load-modify-save is racy)
+- [x] Decide whether concurrent writes need locking — **decided: no.** Writes
+      are atomic, but load-modify-save isn't; two overlapping `done` runs can
+      lose one. Locking portably is fiddly, and the cost of the rare loss is
+      one re-run. Revisit only if the CLI is driven concurrently by a script.
 
 ## License
 

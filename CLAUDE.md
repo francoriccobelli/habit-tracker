@@ -6,13 +6,22 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 All five commands (`add`, `list`, `done`, `remove`, `stats`) work end to end
 and are tested, and the data file can be redirected with `--data-file` or
-`HABIT_TRACKER_DATA`. What remains is in the README's Roadmap section, which
-should be updated as items land — now just a decision on whether concurrent
-writes need locking.
+`HABIT_TRACKER_DATA`. Every roadmap item in the README is now closed. New work
+should add an item there and tick it as it lands.
 
-**Known limitation:** `save_habits` is atomic, but the load-modify-save cycle
-in each handler is not. Two `habit-tracker done` runs racing each other can
-still lose a write. Deliberately unaddressed — see the roadmap.
+**Known limitation, accepted and closed: no write locking.** `save_habits` is
+atomic — it writes a temp file and `os.replace`s it, so an interrupted write
+never truncates the real one — but the load-modify-save cycle in each handler
+is not. Two `habit-tracker done` runs overlapping within the same few
+milliseconds can still lose one write.
+
+This was considered and deliberately rejected, not overlooked. The race needs
+two processes writing at genuinely the same instant, which typing commands by
+hand does not produce; cross-platform advisory locking is fiddly (no portable
+`fcntl`, and lock files need stale-lock recovery); and the cost of the rare
+loss is one re-run of `done`. **Do not add locking without a concrete reason**
+— if one appears, it will be because the CLI is being driven concurrently by a
+script or a cron job, and *that* is the change that should reopen this.
 
 ## Commands
 
