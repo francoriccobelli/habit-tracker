@@ -5,6 +5,7 @@ Behavioural tests arrive with the implementations.
 """
 
 import io
+import os
 import re
 import tempfile
 import unittest
@@ -25,6 +26,17 @@ class HandlerTestCase(unittest.TestCase):
     """
 
     def setUp(self) -> None:
+        # ``data_file()`` consults --data-file and HABIT_TRACKER_DATA ahead of
+        # DATA_FILE, so both are cleared before the redirect below can mean
+        # anything. Kept in step with isolate_data_file in test_storage.
+        env = mock.patch.dict(os.environ)
+        env.start()
+        self.addCleanup(env.stop)
+        os.environ.pop(storage.DATA_FILE_ENV, None)
+
+        storage.set_data_file(None)
+        self.addCleanup(storage.set_data_file, None)
+
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
 
@@ -76,6 +88,19 @@ class BuildParserTests(unittest.TestCase):
     def test_stats_without_a_name_is_rejected(self) -> None:
         with self.assertRaises(SystemExit), redirect_stderr(io.StringIO()):
             self.parser.parse_args(["stats"])
+
+    def test_data_file_defaults_to_none(self) -> None:
+        self.assertIsNone(self.parser.parse_args(["list"]).data_file)
+
+    def test_data_file_is_accepted_before_the_command(self) -> None:
+        args = self.parser.parse_args(["--data-file", "x.json", "list"])
+        self.assertEqual(args.data_file, "x.json")
+        self.assertIs(args.func, cli.cmd_list)
+
+    def test_data_file_is_not_accepted_after_the_command(self) -> None:
+        # A deliberate limitation: it is a global option, like `git --git-dir`.
+        with self.assertRaises(SystemExit), redirect_stderr(io.StringIO()):
+            self.parser.parse_args(["list", "--data-file", "x.json"])
 
     def test_unknown_command_exits(self) -> None:
         with self.assertRaises(SystemExit), redirect_stdout(io.StringIO()):
@@ -353,6 +378,70 @@ class StatsTests(HandlerTestCase):
         code, _, err = self.run_cli("stats", "read")
         self.assertEqual(code, 1)
         self.assertIn("error:", err)
+
+
+class DataFileFlagTests(HandlerTestCase):
+    """End to end through main(), where the flag is actually applied.
+
+    ``self.tmp_path`` is the default location for these tests -- the one the
+    base class patched into ``DATA_FILE`` -- so "the default was untouched"
+    can be asserted as "that file was never created".
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.elsewhere = Path(self._tmp.name) / "elsewhere.json"
+
+    def test_the_flag_redirects_reads_and_writes(self) -> None:
+        code, _, _ = self.run_cli("--data-file", str(self.elsewhere), "add", "read")
+        self.assertEqual(code, 0)
+        self.assertTrue(self.elsewhere.is_file())
+        self.assertFalse(self.tmp_path.exists())
+
+        _, out, _ = self.run_cli("--data-file", str(self.elsewhere), "list")
+        self.assertIn("read", out)
+
+    def test_the_default_path_does_not_see_the_flags_habits(self) -> None:
+        self.run_cli("--data-file", str(self.elsewhere), "add", "read")
+        _, out, _ = self.run_cli("list")
+        self.assertIn("No habits tracked yet", out)
+
+    def test_the_env_var_is_honoured(self) -> None:
+        os.environ[storage.DATA_FILE_ENV] = str(self.elsewhere)
+        code, _, _ = self.run_cli("add", "read")
+        self.assertEqual(code, 0)
+        self.assertTrue(self.elsewhere.is_file())
+        self.assertFalse(self.tmp_path.exists())
+
+    def test_the_flag_beats_the_env_var(self) -> None:
+        os.environ[storage.DATA_FILE_ENV] = str(self.tmp_path)
+        self.run_cli("--data-file", str(self.elsewhere), "add", "read")
+        self.assertTrue(self.elsewhere.is_file())
+        self.assertFalse(self.tmp_path.exists())
+
+    def test_an_override_does_not_leak_into_the_next_run(self) -> None:
+        self.run_cli("--data-file", str(self.elsewhere), "add", "read")
+        # No flag this time: it must fall back, not reuse the previous path.
+        self.run_cli("add", "walk")
+        self.assertEqual([h["name"] for h in storage.load_habits()], ["walk"])
+
+    def test_the_empty_message_names_an_overridden_file(self) -> None:
+        _, out, _ = self.run_cli("--data-file", str(self.elsewhere), "list")
+        self.assertIn("No habits tracked yet in", out)
+        self.assertIn(str(self.elsewhere), out)
+
+    def test_the_empty_message_stays_terse_by_default(self) -> None:
+        _, out, _ = self.run_cli("list")
+        self.assertIn("No habits tracked yet.", out)
+        self.assertNotIn(str(self.tmp_path), out)
+
+    def test_a_missing_override_path_starts_an_empty_tracker(self) -> None:
+        # The chosen behaviour: a path that does not exist is not an error,
+        # because it is the only way to start a tracker somewhere new.
+        code, out, err = self.run_cli("--data-file", str(self.elsewhere), "list")
+        self.assertEqual(code, 0)
+        self.assertEqual(err, "")
+        self.assertIn("No habits tracked yet", out)
 
 
 if __name__ == "__main__":

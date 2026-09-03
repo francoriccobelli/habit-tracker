@@ -1,10 +1,14 @@
 """Persistence layer for habit data.
 
-All habits live in a single JSON file under the user's home directory
-(``~/.habit_tracker/habits.json``). Keeping every read and write in this module
-means the CLI never has to know about paths, file locking, or the on-disk
-format -- and it makes the whole thing easy to test by pointing
-:data:`DATA_DIR` somewhere temporary.
+All habits live in a single JSON file, by default under the user's home
+directory (``~/.habit_tracker/habits.json``). Keeping every read and write in
+this module means the CLI never has to know about paths, file locking, or the
+on-disk format.
+
+:func:`data_file` resolves the location on every call, so the file can be
+redirected three ways -- ``--data-file`` via :func:`set_data_file`, the
+:data:`DATA_FILE_ENV` environment variable, or (in tests) patching
+:data:`DATA_FILE` itself.
 
 Planned on-disk format (a dict, not a bare list, so we can add fields later
 without breaking old files)::
@@ -36,20 +40,60 @@ DATA_DIR = Path.home() / ".habit_tracker"
 #: The single JSON file we read from and write to.
 DATA_FILE = DATA_DIR / "habits.json"
 
+#: Environment variable that redirects the data file. Named here so callers
+#: and tests refer to it through the module rather than as a bare string.
+DATA_FILE_ENV = "HABIT_TRACKER_DATA"
+
 #: Bumped whenever the on-disk shape changes in a way that needs migrating.
 SCHEMA_VERSION = 1
 
 Habit = dict[str, Any]
 """One habit record. TODO: promote to a dataclass once the fields settle."""
 
+#: Set by ``--data-file`` through :func:`set_data_file`; outranks the env var.
+_override: Path | None = None
+
+
+def set_data_file(path: str | Path | None) -> None:
+    """Point every subsequent read and write at ``path``.
+
+    ``None`` clears the override, restoring the env var or :data:`DATA_FILE`.
+    ``main()`` calls this on every run, passing ``None`` when the flag is
+    absent, so an override can never outlive the invocation that asked for it.
+    """
+    global _override
+    # expanduser so "~/habits.json" works even where a shell did not expand it.
+    _override = Path(path).expanduser() if path is not None else None
+
+
+def using_override() -> bool:
+    """Whether the data file comes from the flag or the environment.
+
+    A statement about the precedence rules, so it belongs beside them rather
+    than in ``cli.py`` -- which uses it only to decide whether naming the file
+    would tell the user anything they did not already know.
+    """
+    return _override is not None or bool(os.environ.get(DATA_FILE_ENV))
+
 
 def data_file() -> Path:
     """Return the path of the JSON file habits are stored in.
 
-    Indirection on purpose: tests (and, later, a ``--data-file`` flag) can
-    override the location without every caller hard-coding :data:`DATA_FILE`.
+    Precedence, highest first: ``--data-file`` (via :func:`set_data_file`),
+    then the :data:`DATA_FILE_ENV` environment variable, then
+    :data:`DATA_FILE`.
+
+    Every source is read at *call* time rather than import time, which is what
+    lets a test redirect :data:`DATA_FILE` in ``setUp`` and have it take
+    effect. An empty environment value counts as unset.
     """
-    # TODO: honour a HABIT_TRACKER_DATA env var, then fall back to DATA_FILE.
+    if _override is not None:
+        return _override
+
+    from_env = os.environ.get(DATA_FILE_ENV)
+    if from_env:
+        return Path(from_env).expanduser()
+
     return DATA_FILE
 
 

@@ -6,6 +6,7 @@ against a temporary directory -- see :class:`BehaviourTests`.
 """
 
 import json
+import os
 import tempfile
 import unittest
 from datetime import date, timedelta
@@ -15,7 +16,30 @@ from unittest import mock
 from habit_tracker import storage
 
 
+def isolate_data_file(test: unittest.TestCase) -> None:
+    """Detach ``test`` from any data file the developer's machine points at.
+
+    ``data_file()`` consults ``--data-file`` and ``HABIT_TRACKER_DATA`` before
+    ``DATA_FILE``, so redirecting ``DATA_FILE`` alone is no longer enough: on a
+    machine where that variable happens to be set, the suite would read and
+    write *there* instead of its temp directory. Both are neutralised here, and
+    restored on cleanup.
+    """
+    env = mock.patch.dict(os.environ)
+    env.start()
+    test.addCleanup(env.stop)
+    os.environ.pop(storage.DATA_FILE_ENV, None)
+
+    storage.set_data_file(None)
+    test.addCleanup(storage.set_data_file, None)
+
+
 class DataLocationTests(unittest.TestCase):
+    def setUp(self) -> None:
+        # This class asserts on the *default* path, so it needs the same
+        # detachment even though it never writes.
+        isolate_data_file(self)
+
     def test_data_file_lives_in_a_dotfolder_under_home(self) -> None:
         self.assertEqual(storage.DATA_FILE.parent, storage.DATA_DIR)
         self.assertEqual(storage.DATA_DIR.name, ".habit_tracker")
@@ -50,11 +74,14 @@ class BehaviourTests(unittest.TestCase):
 
     Every test here runs against a throwaway directory, never the real
     ``~/.habit_tracker``. :func:`storage.data_file` reads the module-level
-    ``DATA_FILE`` at call time, so redirecting it in ``setUp`` is enough to
-    keep the developer's own habits safe from the suite.
+    ``DATA_FILE`` at call time, so redirecting it in ``setUp`` -- together with
+    :func:`isolate_data_file`, which clears the higher-priority flag and env
+    var -- keeps the developer's own habits safe from the suite.
     """
 
     def setUp(self) -> None:
+        isolate_data_file(self)
+
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
 
@@ -308,6 +335,69 @@ class TrackedSinceTests(unittest.TestCase):
                 self.assertGreaterEqual(end, self.TODAY)
                 for iso in habit.get("completions", []):
                     self.assertTrue(start <= date.fromisoformat(iso) <= end)
+
+
+class DataFileOverrideTests(unittest.TestCase):
+    """Precedence: --data-file, then HABIT_TRACKER_DATA, then DATA_FILE."""
+
+    FROM_FLAG = "/tmp/habit-tracker-from-flag.json"
+    FROM_ENV = "/tmp/habit-tracker-from-env.json"
+
+    def setUp(self) -> None:
+        isolate_data_file(self)
+
+    def test_the_default_is_the_module_constant(self) -> None:
+        self.assertEqual(storage.data_file(), storage.DATA_FILE)
+        self.assertFalse(storage.using_override())
+
+    def test_the_env_var_is_honoured(self) -> None:
+        os.environ[storage.DATA_FILE_ENV] = self.FROM_ENV
+        self.assertEqual(storage.data_file(), Path(self.FROM_ENV))
+        self.assertTrue(storage.using_override())
+
+    def test_an_empty_env_value_counts_as_unset(self) -> None:
+        os.environ[storage.DATA_FILE_ENV] = ""
+        self.assertEqual(storage.data_file(), storage.DATA_FILE)
+        self.assertFalse(storage.using_override())
+
+    def test_the_flag_outranks_the_env_var(self) -> None:
+        os.environ[storage.DATA_FILE_ENV] = self.FROM_ENV
+        storage.set_data_file(self.FROM_FLAG)
+        self.assertEqual(storage.data_file(), Path(self.FROM_FLAG))
+
+    def test_clearing_the_flag_falls_back_to_the_env_var(self) -> None:
+        os.environ[storage.DATA_FILE_ENV] = self.FROM_ENV
+        storage.set_data_file(self.FROM_FLAG)
+        storage.set_data_file(None)
+        self.assertEqual(storage.data_file(), Path(self.FROM_ENV))
+
+    def test_clearing_the_flag_falls_back_to_the_default(self) -> None:
+        storage.set_data_file(self.FROM_FLAG)
+        storage.set_data_file(None)
+        self.assertEqual(storage.data_file(), storage.DATA_FILE)
+        self.assertFalse(storage.using_override())
+
+    def test_a_path_object_is_accepted(self) -> None:
+        storage.set_data_file(Path(self.FROM_FLAG))
+        self.assertEqual(storage.data_file(), Path(self.FROM_FLAG))
+
+    def test_a_tilde_is_expanded_from_the_flag(self) -> None:
+        storage.set_data_file("~/habits.json")
+        self.assertEqual(storage.data_file(), Path.home() / "habits.json")
+
+    def test_a_tilde_is_expanded_from_the_env_var(self) -> None:
+        os.environ[storage.DATA_FILE_ENV] = "~/habits.json"
+        self.assertEqual(storage.data_file(), Path.home() / "habits.json")
+
+    def test_reads_and_writes_follow_the_override(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            # Nested, to prove ensure_data_dir still makes the parent.
+            target = Path(tmp) / "nested" / "habits.json"
+            storage.set_data_file(target)
+            storage.save_habits([{"name": "read", "created": "x", "completions": []}])
+
+            self.assertTrue(target.is_file())
+            self.assertEqual([h["name"] for h in storage.load_habits()], ["read"])
 
 
 if __name__ == "__main__":

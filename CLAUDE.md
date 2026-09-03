@@ -5,9 +5,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Project state
 
 All five commands (`add`, `list`, `done`, `remove`, `stats`) work end to end
-and are tested. What remains is in the README's Roadmap section, which should
-be updated as items land — chiefly the `--data-file` / `HABIT_TRACKER_DATA`
-override, and a decision on whether concurrent writes need locking.
+and are tested, and the data file can be redirected with `--data-file` or
+`HABIT_TRACKER_DATA`. What remains is in the README's Roadmap section, which
+should be updated as items land — now just a decision on whether concurrent
+writes need locking.
 
 **Known limitation:** `save_habits` is atomic, but the load-modify-save cycle
 in each handler is not. Two `habit-tracker done` runs racing each other can
@@ -56,22 +57,40 @@ Conventions that follow from that split:
   `_plural` lives in `cli.py`, because `storage.py` never prints.
 - **`build_parser()` is split out from `main()`** so tests can inspect the
   parser and check `--help` without running a command.
-- **`data_file()` is indirection on purpose.** Nothing hard-codes `DATA_FILE`;
-  the accessor is the future home of a `HABIT_TRACKER_DATA` env var and a
-  `--data-file` flag.
+- **`data_file()` is indirection on purpose.** Nothing hard-codes `DATA_FILE`.
+  The accessor resolves the path on every call, highest precedence first:
+  `--data-file` (stored by `set_data_file()`, which `main()` calls on every run
+  so an override cannot outlive it), then `HABIT_TRACKER_DATA`, then
+  `DATA_FILE`. Resolution at *call* time is what lets tests redirect the
+  constant. `using_override()` reports whether the path came from either
+  override — `cmd_list` uses it to decide whether naming the file is useful.
 
 ## Testing: the one rule
 
-**Any test that reaches storage must redirect `storage.DATA_FILE` to a temp
-directory first.** `data_file()` reads that module global at call time, so
-`mock.patch.object(storage, "DATA_FILE", tmp)` in `setUp` is enough.
+**Any test that reaches storage must detach from the real data file first** —
+and that now takes two steps, not one:
 
-This is not stylistic. `save_habits` writes for real, so a test without the
-redirect writes to the developer's own `~/.habit_tracker/habits.json`. Both
-suites have a base for this: `BehaviourTests.setUp` in `tests/test_storage.py`
-and `HandlerTestCase` in `tests/test_cli.py` (which also gives you `run_cli()`,
+1. Redirect the constant: `mock.patch.object(storage, "DATA_FILE", tmp)`.
+2. Clear what outranks it — the `HABIT_TRACKER_DATA` env var and any
+   `set_data_file()` override. Step 1 alone is **not** enough: both are
+   consulted ahead of `DATA_FILE`, so on a machine where that variable happens
+   to be set, a suite that only patched the constant would read and write at
+   the variable's path instead.
+
+This is not stylistic. `save_habits` writes for real, so a test that skips
+either step can write to the developer's own habits. Both suites have a base
+that does both: `BehaviourTests.setUp` in `tests/test_storage.py` (via the
+`isolate_data_file` helper there, also used by `DataLocationTests`) and
+`HandlerTestCase` in `tests/test_cli.py` (which also gives you `run_cli()`,
 returning `(exit_code, stdout, stderr)`). Inherit one rather than rolling your
 own.
+
+To check the isolation still holds, run the suite with the variable set — it
+must pass, and must not create that file:
+
+```bash
+HABIT_TRACKER_DATA=/tmp/canary.json python -m unittest discover -s tests
+```
 
 ## Data format
 

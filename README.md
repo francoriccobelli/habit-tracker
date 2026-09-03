@@ -56,6 +56,25 @@ read
 Done today, but yesterday was missed — so the current run is 1 day while the
 best run, two days back, was 2.
 
+## Choosing the data file
+
+By default everything lives at `~/.habit_tracker/habits.json`. Two ways to
+point somewhere else — useful for a scratch tracker, or for trying the CLI
+without touching your real habits:
+
+```bash
+habit-tracker --data-file ./demo.json list   # this run only
+export HABIT_TRACKER_DATA=./demo.json        # every run in this shell
+```
+
+Highest precedence first: `--data-file`, then `HABIT_TRACKER_DATA`, then the
+default. `--data-file` is a global option, so it goes *before* the command.
+
+A path that doesn't exist yet is not an error — it starts an empty tracker, and
+the file is created on the first `add`. Since a mistyped path would otherwise
+look just like an empty tracker, `list` names the file it read whenever the
+location has been overridden.
+
 ## Data
 
 Habits are stored as JSON at `~/.habit_tracker/habits.json` — outside the
@@ -98,7 +117,7 @@ pytest                                    # also works, if you installed [dev]
 - [x] Streak calculation, shown in `list`
 - [x] Real tests for each command
 - [x] `stats <name>` — totals, completion rate, and longest streak
-- [ ] `--data-file` / `HABIT_TRACKER_DATA` override
+- [x] `--data-file` / `HABIT_TRACKER_DATA` override
 - [ ] Decide whether concurrent writes need locking (load-modify-save is racy)
 
 ## License

@@ -11,6 +11,7 @@ Usage::
     habit-tracker done read
     habit-tracker stats read
     habit-tracker remove read
+    habit-tracker --data-file ./demo.json list
 """
 
 from __future__ import annotations
@@ -60,7 +61,11 @@ def cmd_list(args: argparse.Namespace) -> int:
     """Show every tracked habit and its current streak."""
     habits = storage.load_habits()
     if not habits:
-        print("No habits tracked yet. Add one with: habit-tracker add <name>")
+        # Name the file only when it is not the usual one: an empty tracker is
+        # the expected first run at the default path, but at an overridden one
+        # it may just mean the path was mistyped.
+        where = f" in {storage.data_file()}" if storage.using_override() else ""
+        print(f"No habits tracked yet{where}. Add one with: habit-tracker add <name>")
         return 0
 
     today = date.today()
@@ -172,6 +177,15 @@ def build_parser() -> argparse.ArgumentParser:
         action="version",
         version=f"%(prog)s {__version__}",
     )
+    parser.add_argument(
+        "--data-file",
+        metavar="PATH",
+        default=None,
+        help=(
+            "read and write habits at PATH instead of the default; "
+            f"overrides ${storage.DATA_FILE_ENV}"
+        ),
+    )
 
     subparsers = parser.add_subparsers(dest="command", metavar="command")
 
@@ -213,6 +227,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     """
     parser = build_parser()
     args = parser.parse_args(argv)
+
+    # Unconditionally, so that passing no flag *clears* any override left by an
+    # earlier call rather than inheriting it -- main() runs many times per
+    # process under test.
+    storage.set_data_file(args.data_file)
 
     if not getattr(args, "func", None):
         # No subcommand given -- show help rather than doing nothing silently.
