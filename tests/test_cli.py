@@ -14,7 +14,7 @@ from datetime import date, timedelta
 from pathlib import Path
 from unittest import mock
 
-from habit_tracker import cli, storage
+from habit_tracker import cli, render, storage
 
 
 class HandlerTestCase(unittest.TestCase):
@@ -36,6 +36,11 @@ class HandlerTestCase(unittest.TestCase):
 
         storage.set_data_file(None)
         self.addCleanup(storage.set_data_file, None)
+
+        # Colour is module state too. main() sets it on every run, but pin it
+        # off so this suite cannot inherit it from whatever ran before.
+        render.set_colour("never")
+        self.addCleanup(render.set_colour, "never")
 
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
@@ -97,6 +102,27 @@ class BuildParserTests(unittest.TestCase):
     def test_stats_without_a_name_is_rejected(self) -> None:
         with self.assertRaises(SystemExit), redirect_stderr(io.StringIO()):
             self.parser.parse_args(["stats"])
+
+    def test_history_defaults_to_four_weeks(self) -> None:
+        args = self.parser.parse_args(["history", "read"])
+        self.assertEqual(args.weeks, 4)
+        self.assertIs(args.func, cli.cmd_history)
+
+    def test_history_accepts_a_week_count(self) -> None:
+        self.assertEqual(self.parser.parse_args(["history", "read", "--weeks", "8"]).weeks, 8)
+
+    def test_history_rejects_a_week_count_below_one(self) -> None:
+        for bad in ("0", "-3", "many"):
+            with self.subTest(weeks=bad):
+                with self.assertRaises(SystemExit), redirect_stderr(io.StringIO()):
+                    self.parser.parse_args(["history", "read", "--weeks", bad])
+
+    def test_color_defaults_to_auto(self) -> None:
+        self.assertEqual(self.parser.parse_args(["list"]).color, "auto")
+
+    def test_color_rejects_an_unknown_mode(self) -> None:
+        with self.assertRaises(SystemExit), redirect_stderr(io.StringIO()):
+            self.parser.parse_args(["--color", "rainbow", "list"])
 
     def test_data_file_defaults_to_none(self) -> None:
         self.assertIsNone(self.parser.parse_args(["list"]).data_file)
@@ -356,20 +382,6 @@ class RemoveTests(HandlerTestCase):
         self.assertNotIn("1 completions", out)
 
 
-class PluralTests(unittest.TestCase):
-    """The helper behind every count the CLI prints."""
-
-    def test_one_is_singular(self) -> None:
-        self.assertEqual(cli._plural(1, "day"), "1 day")
-
-    def test_everything_else_is_plural(self) -> None:
-        self.assertEqual(cli._plural(0, "day"), "0 days")
-        self.assertEqual(cli._plural(2, "day"), "2 days")
-
-    def test_an_irregular_plural_can_be_given(self) -> None:
-        self.assertEqual(cli._plural(2, "entry", "entries"), "2 entries")
-
-
 class StatsTests(HandlerTestCase):
     def seed(self, created: str, *completions: str) -> None:
         """Write one habit straight to disk, bypassing add/done.
@@ -462,6 +474,83 @@ class StatsTests(HandlerTestCase):
         code, _, err = self.run_cli("stats", "read")
         self.assertEqual(code, 1)
         self.assertIn("error:", err)
+
+
+class HistoryTests(HandlerTestCase):
+    def test_history_draws_a_grid(self) -> None:
+        self.run_cli("add", "read")
+        self.run_cli("done", "read")
+        code, out, _ = self.run_cli("history", "read")
+        self.assertEqual(code, 0)
+        self.assertIn("read", out)
+        self.assertIn("Mo Tu We Th Fr Sa Su", out)
+        self.assertIn("x", out)
+
+    def test_history_fails_on_an_unknown_habit(self) -> None:
+        code, _, err = self.run_cli("history", "read")
+        self.assertEqual(code, 1)
+        self.assertIn("not tracking", err)
+
+    def test_weeks_controls_the_number_of_rows(self) -> None:
+        # Backdated well past the window, so clamping cannot shorten it.
+        self.run_cli("add", "read")
+        self.run_cli("done", "read", "--date", "2020-01-06")
+
+        def rows(*extra: str) -> int:
+            _, out, _ = self.run_cli("history", "read", *extra)
+            return sum(1 for line in out.splitlines() if line.startswith("  20"))
+
+        self.assertEqual(rows(), 4)  # the default
+        self.assertEqual(rows("--weeks", "1"), 1)
+        self.assertEqual(rows("--weeks", "9"), 9)
+
+    def test_history_matches_case_insensitively(self) -> None:
+        self.run_cli("add", "Read")
+        code, out, _ = self.run_cli("history", "read")
+        self.assertEqual(code, 0)
+        self.assertIn("Read", out)  # echoes the stored spelling
+
+    def test_history_leaves_the_data_file_untouched(self) -> None:
+        self.run_cli("add", "read")
+        before = self.tmp_path.read_bytes()
+        self.run_cli("history", "read")
+        self.assertEqual(self.tmp_path.read_bytes(), before)
+
+
+class ColourOutputTests(HandlerTestCase):
+    """What reaches a pipe. run_cli captures into StringIO, i.e. a non-TTY."""
+
+    ESCAPE = "\033"
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.run_cli("add", "read")
+        self.run_cli("done", "read")
+
+    def test_no_escapes_reach_non_tty_stdout_by_default(self) -> None:
+        # The guard that stops piped or redirected output being corrupted.
+        for argv in (("list",), ("stats", "read"), ("history", "read")):
+            with self.subTest(argv=argv):
+                _, out, _ = self.run_cli(*argv)
+                self.assertNotIn(self.ESCAPE, out)
+
+    def test_color_never_is_plain(self) -> None:
+        _, out, _ = self.run_cli("--color", "never", "list")
+        self.assertNotIn(self.ESCAPE, out)
+
+    def test_color_always_paints_even_a_pipe(self) -> None:
+        _, out, _ = self.run_cli("--color", "always", "list")
+        self.assertIn(self.ESCAPE, out)
+
+    def test_color_always_paints_errors(self) -> None:
+        _, _, err = self.run_cli("--color", "always", "stats", "nope")
+        self.assertIn(self.ESCAPE, err)
+        self.assertIn("not tracking", err)
+
+    def test_colour_does_not_leak_into_the_next_run(self) -> None:
+        self.run_cli("--color", "always", "list")
+        _, out, _ = self.run_cli("list")  # no flag: must fall back to auto
+        self.assertNotIn(self.ESCAPE, out)
 
 
 class DataFileFlagTests(HandlerTestCase):

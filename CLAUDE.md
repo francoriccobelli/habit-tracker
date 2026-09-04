@@ -4,7 +4,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project state
 
-All six commands (`add`, `list`, `done`, `undone`, `remove`, `stats`) work end
+All seven commands (`add`, `list`, `done`, `undone`, `remove`, `stats`,
+`history`) work end
 to end and are tested, and the data file can be redirected with `--data-file`
 or `HABIT_TRACKER_DATA`. Every roadmap item in the README is now closed. New
 work should add an item there and tick it as it lands.
@@ -12,9 +13,9 @@ work should add an item there and tick it as it lands.
 CI lives in `.github/workflows/ci.yml` (Python 3.10–3.14 on Ubuntu, plus a
 Windows job). It runs the suite twice — once with nothing installed, to keep
 the stdlib-only promise honest — and re-runs it with `HABIT_TRACKER_DATA` set,
-failing if the suite writes to that path. **Note:** as of this writing the
-workflow has never actually run; `origin/main` is behind and nothing has been
-pushed.
+failing if the suite writes to that path. It also smoke-tests the installed
+console script, which no unit test reaches. `main` has been pushed, so check
+the Actions tab rather than assuming green.
 
 **Known limitation, accepted and closed: no write locking.** `save_habits` is
 atomic — it writes a temp file and `os.replace`s it, so an interrupted write
@@ -45,15 +46,28 @@ discovery with "Start directory is not importable".
 
 ## Architecture
 
-Two modules with a strict, enforced split:
+Three modules, layered one way with no cycles:
 
-- **`cli.py` never opens a file.** Argparse setup and dispatch only.
+```
+storage.py   owns the data file      (never prints)
+    ^
+render.py    data -> list[str]       (never prints, never opens a file)
+    ^
+cli.py       argparse and dispatch   (prints; opens nothing)
+```
+
 - **`storage.py` never prints.** It is the sole owner of the data file — its
-  path, its format, and its migrations.
+  path, its format, and its migrations. It imports neither of the others.
+- **`render.py` never prints and never opens a file.** Every view is a pure
+  function returning `list[str]`, which is what lets the calendar be tested as
+  a function instead of through captured stdout. It may import `storage` to
+  reuse the pure helpers rather than restating that logic.
+- **`cli.py` never opens a file.** Argparse, dispatch, and printing what
+  `render` hands back.
 
-This is what makes each module testable without the other, and it is the one
+This is what makes each module testable without the others, and it is the one
 rule to preserve when adding features. A new command that needs data asks
-`storage` for it; it does not reach for `pathlib` itself.
+`storage` for it; a new view goes in `render`; neither reaches for `pathlib`.
 
 Conventions that follow from that split:
 
@@ -69,11 +83,12 @@ Conventions that follow from that split:
   `tracked_since` take data and return data — they touch neither the disk nor
   stdout. They sit in
   `storage.py` because `cli.py` is explicitly barred from holding business
-  logic. Put the next such helper there too. The exceptions are the two ends of
-  the CLI's own I/O: `_plural` (formatting) and `_iso_day` (parsing `--date`)
-  live in `cli.py`, because `storage.py` neither prints nor reads argv.
-  `_iso_day` raises `ValueError` with a user-facing message rather than
-  printing, letting `main()`'s existing handler render it.
+  logic. Put the next such helper there too. Formatting is `render.py`'s
+  (`plural`, `error`, the three `*_lines` views); the one thing that stays in
+  `cli.py` is `_iso_day`, which parses `--date` — argv is the CLI's own input,
+  and neither other module reads it. `_iso_day` raises `ValueError` with a
+  user-facing message rather than printing, letting `main()`'s existing
+  handler render it.
 - **`build_parser()` is split out from `main()`** so tests can inspect the
   parser and check `--help` without running a command.
 - **`data_file()` is indirection on purpose.** Nothing hard-codes `DATA_FILE`.
@@ -83,6 +98,16 @@ Conventions that follow from that split:
   `DATA_FILE`. Resolution at *call* time is what lets tests redirect the
   constant. `using_override()` reports whether the path came from either
   override — `cmd_list` uses it to decide whether naming the file is useful.
+- **Colour is module state in `render.py`, resolved once per run.** `main()`
+  calls `render.set_colour(args.color, sys.stdout)` unconditionally, for the
+  same reason it calls `set_data_file` — so nothing leaks between the many
+  `main()` calls a test process makes. `auto` needs a TTY and an unset
+  `NO_COLOR`; `always` overrides both, since an explicit flag beats an ambient
+  preference. Every painted string goes through `_paint`, which is the
+  identity function when colour is off, so disabled output is byte-for-byte
+  what it was before colour existed. **Pad before painting** — escape codes
+  lengthen a string without widening it, so padding a painted cell silently
+  breaks column alignment.
 
 ## Testing: the one rule
 

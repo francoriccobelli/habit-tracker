@@ -1,8 +1,12 @@
 """Command-line entry point for habit-tracker.
 
-Everything here is argparse and dispatch -- no file access, no business logic.
-Each ``cmd_*`` handler takes the parsed namespace and returns a process exit
-code (0 for success), which keeps them straightforward to call from tests.
+Everything here is argparse and dispatch -- no file access, no business logic,
+and no string building beyond a one-line confirmation. Each ``cmd_*`` handler
+takes the parsed namespace and returns a process exit code (0 for success),
+which keeps them straightforward to call from tests.
+
+Views come from :mod:`habit_tracker.render`, which returns lines for this
+module to print.
 
 Usage::
 
@@ -11,8 +15,10 @@ Usage::
     habit-tracker done read
     habit-tracker undone read --date 2026-09-01
     habit-tracker stats read
+    habit-tracker history read --weeks 8
     habit-tracker remove read
     habit-tracker --data-file ./demo.json list
+    habit-tracker --color never list
 """
 
 from __future__ import annotations
@@ -22,17 +28,7 @@ import sys
 from collections.abc import Sequence
 from datetime import date
 
-from habit_tracker import __version__, storage
-
-
-def _plural(count: int, singular: str, plural: str | None = None) -> str:
-    """Render ``count`` with the matching form of its noun.
-
-    ``_plural(1, "day")`` gives ``"1 day"``, ``_plural(2, "day")`` gives
-    ``"2 days"``. Formatting, so it lives here rather than in storage -- which
-    never prints.
-    """
-    return f"{count} {singular if count == 1 else plural or singular + 's'}"
+from habit_tracker import __version__, render, storage
 
 
 def _iso_day(raw: str | None) -> str:
@@ -55,6 +51,22 @@ def _iso_day(raw: str | None) -> str:
         raise ValueError(f"{raw!r} is not an ISO date (YYYY-MM-DD)") from None
 
 
+def _positive_int(raw: str) -> int:
+    """An argparse ``type`` for counts that must be at least 1.
+
+    Raising ArgumentTypeError lets argparse render the complaint and exit 2,
+    the way it does for every other malformed argument.
+    """
+    try:
+        value = int(raw)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{raw!r} is not a whole number") from None
+
+    if value < 1:
+        raise argparse.ArgumentTypeError(f"must be 1 or more, not {value}")
+    return value
+
+
 def cmd_add(args: argparse.Namespace) -> int:
     """Create a new habit to track."""
     habits = storage.load_habits()
@@ -63,7 +75,7 @@ def cmd_add(args: argparse.Namespace) -> int:
     if existing is not None:
         # Report the stored spelling, not what was typed -- "Read" and "read"
         # are the same habit, and seeing the stored one explains the refusal.
-        print(f"error: already tracking {existing['name']!r}", file=sys.stderr)
+        print(render.error(f"already tracking {existing['name']!r}"), file=sys.stderr)
         return 1
 
     habits.append(
@@ -89,14 +101,8 @@ def cmd_list(args: argparse.Namespace) -> int:
         print(f"No habits tracked yet{where}. Add one with: habit-tracker add <name>")
         return 0
 
-    today = date.today()
-    today_iso = today.isoformat()
-    width = max(len(h["name"]) for h in habits)
-
-    for habit in habits:
-        mark = "x" if today_iso in habit.get("completions", []) else " "
-        streak = storage.current_streak(habit, today)
-        print(f"[{mark}] {habit['name']:<{width}}  {_plural(streak, 'day')}")
+    for line in render.list_lines(habits):
+        print(line)
     return 0
 
 
@@ -109,24 +115,28 @@ def cmd_stats(args: argparse.Namespace) -> int:
     habits = storage.load_habits()
     habit = storage.find_habit(habits, args.name)
     if habit is None:
-        print(f"error: not tracking {args.name!r}", file=sys.stderr)
+        print(render.error(f"not tracking {args.name!r}"), file=sys.stderr)
         return 1
 
-    today = date.today()
-    tracked = storage.tracked_days(habit, today)
-    completed = storage.completed_days(habit)
+    for line in render.stats_lines(habit):
+        print(line)
+    return 0
 
-    # tracked_days never returns 0, so the rate cannot divide by zero -- and
-    # its window covers every completion, so it cannot exceed 100%. The date
-    # comes from the same window as the count, so the two always agree.
-    print(habit["name"])
-    print(
-        f"  Tracking since   {storage.tracked_since(habit, today).isoformat()}"
-        f"  ({_plural(tracked, 'day')})"
-    )
-    print(f"  Completed        {_plural(completed, 'day')}  ({completed / tracked:.0%})")
-    print(f"  Current streak   {_plural(storage.current_streak(habit, today), 'day')}")
-    print(f"  Longest streak   {_plural(storage.longest_streak(habit), 'day')}")
+
+def cmd_history(args: argparse.Namespace) -> int:
+    """Draw which days a habit was completed, as a calendar.
+
+    The view `stats` cannot give: a rate says nothing about *why*, while a
+    grid whose every gap lands on a weekend says it at a glance.
+    """
+    habits = storage.load_habits()
+    habit = storage.find_habit(habits, args.name)
+    if habit is None:
+        print(render.error(f"not tracking {args.name!r}"), file=sys.stderr)
+        return 1
+
+    for line in render.history_lines(habit, weeks=args.weeks):
+        print(line)
     return 0
 
 
@@ -137,7 +147,7 @@ def cmd_done(args: argparse.Namespace) -> int:
     habits = storage.load_habits()
     habit = storage.find_habit(habits, args.name)
     if habit is None:
-        print(f"error: not tracking {args.name!r}", file=sys.stderr)
+        print(render.error(f"not tracking {args.name!r}"), file=sys.stderr)
         return 1
 
     completions = habit.setdefault("completions", [])
@@ -164,7 +174,7 @@ def cmd_undone(args: argparse.Namespace) -> int:
     habits = storage.load_habits()
     habit = storage.find_habit(habits, args.name)
     if habit is None:
-        print(f"error: not tracking {args.name!r}", file=sys.stderr)
+        print(render.error(f"not tracking {args.name!r}"), file=sys.stderr)
         return 1
 
     completions = habit.get("completions", [])
@@ -186,7 +196,7 @@ def cmd_remove(args: argparse.Namespace) -> int:
     habits = storage.load_habits()
     habit = storage.find_habit(habits, args.name)
     if habit is None:
-        print(f"error: not tracking {args.name!r}", file=sys.stderr)
+        print(render.error(f"not tracking {args.name!r}"), file=sys.stderr)
         return 1
 
     habits.remove(habit)
@@ -194,7 +204,7 @@ def cmd_remove(args: argparse.Namespace) -> int:
     lost = storage.completed_days(habit)
     print(
         f"Stopped tracking {habit['name']!r} and "
-        f"discarded {_plural(lost, 'completion')}."
+        f"discarded {render.plural(lost, 'completion')}."
     )
     return 0
 
@@ -221,6 +231,15 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "read and write habits at PATH instead of the default; "
             f"overrides ${storage.DATA_FILE_ENV}"
+        ),
+    )
+    parser.add_argument(
+        "--color",
+        choices=("auto", "always", "never"),
+        default="auto",
+        help=(
+            "colourise output; 'auto' (the default) means only when writing "
+            "to a terminal with $NO_COLOR unset"
         ),
     )
 
@@ -259,6 +278,16 @@ def build_parser() -> argparse.ArgumentParser:
     stats.add_argument("name", help="name of the habit")
     stats.set_defaults(func=cmd_stats)
 
+    history = subparsers.add_parser("history", help="draw a habit as a calendar")
+    history.add_argument("name", help="name of the habit")
+    history.add_argument(
+        "--weeks",
+        type=_positive_int,
+        default=4,
+        help="how many weeks to draw (default: 4)",
+    )
+    history.set_defaults(func=cmd_history)
+
     return parser
 
 
@@ -274,10 +303,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
 
-    # Unconditionally, so that passing no flag *clears* any override left by an
-    # earlier call rather than inheriting it -- main() runs many times per
-    # process under test.
+    # Both unconditionally, so that passing no flag *clears* whatever an
+    # earlier call left behind rather than inheriting it -- main() runs many
+    # times per process under test.
     storage.set_data_file(args.data_file)
+    render.set_colour(args.color, sys.stdout)
 
     if not getattr(args, "func", None):
         # No subcommand given -- show help rather than doing nothing silently.
@@ -290,10 +320,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         return args.func(args)
     except ValueError as exc:
-        print(f"error: {exc}", file=sys.stderr)
+        print(render.error(str(exc)), file=sys.stderr)
         return 1
     except OSError as exc:
-        print(f"error: could not use the data file: {exc}", file=sys.stderr)
+        print(render.error(f"could not use the data file: {exc}"), file=sys.stderr)
         return 1
 
 

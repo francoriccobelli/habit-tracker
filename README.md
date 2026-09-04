@@ -4,7 +4,7 @@
 
 A small command-line habit tracker, built while learning Claude Code.
 
-> **Status: working.** All six commands are implemented and tested against
+> **Status: working.** All seven commands are implemented and tested against
 > a real data file. `list` shows current streaks; `stats` shows one habit's
 > full record.
 
@@ -38,6 +38,7 @@ habit-tracker done read          # mark today complete
 habit-tracker done read --date 2026-09-01
 habit-tracker undone read        # take back today's completion
 habit-tracker stats read         # one habit's full record
+habit-tracker history read       # which days you actually did it
 habit-tracker remove read        # stop tracking, discard history
 ```
 
@@ -61,6 +62,34 @@ read
 
 Done today, but yesterday was missed — so the current run is 1 day while the
 best run, two days back, was 2.
+
+`history` draws the pattern those numbers summarise. A rate of 72% says
+nothing about *why*; a grid whose gaps all fall on the same weekday says it at
+a glance:
+
+```
+$ habit-tracker history read
+read
+            Mo Tu We Th Fr Sa Su
+  2026-08-17    x  x  .  x  x  .
+  2026-08-24 .  x  x  .  x  x  x
+  2026-08-31 .  x  x  x  x
+
+  13 of 18 days
+```
+
+Rows are weeks starting Monday. `x` is done, `.` is missed, and a blank is a
+day outside the habit's life — before you started tracking it, or still in the
+future. `--weeks N` widens the window (default 4); it is clamped so a habit
+added yesterday draws one row, not four empty ones.
+
+## Colour
+
+Output is coloured when it goes to a terminal and left plain when it is piped
+or redirected, so captured output never picks up escape codes. Set
+[`NO_COLOR`](https://no-color.org) to turn it off everywhere, or use
+`--color auto|always|never` for one run — an explicit `--color always`
+overrides `NO_COLOR`.
 
 ## Choosing the data file
 
@@ -101,13 +130,15 @@ repo, so your own data never lands in a commit. Shape:
 habit_tracker/
   __init__.py    version and package docstring
   cli.py         argparse wiring and command handlers
+  render.py      turns habit data into printable lines
   storage.py     the only module that touches the data file
 tests/
 pyproject.toml
 ```
 
-The split is deliberate: `cli.py` never opens a file, `storage.py` never
-prints. Each is testable without the other.
+The split is deliberate and one-way: `storage.py` never prints, `render.py`
+neither prints nor opens a file, and `cli.py` opens nothing — it prints what
+`render` returns. Each is testable without the others.
 
 ## Tests
 
@@ -126,6 +157,8 @@ pytest                                    # also works, if you installed [dev]
 - [x] `--data-file` / `HABIT_TRACKER_DATA` override
 - [x] `undone <name>` — take back a day's completion
 - [x] CI on GitHub Actions (Python 3.10–3.14, plus a Windows job)
+- [x] `history <name>` — a Monday-start calendar of completed days
+- [x] Colour on a terminal, plain when piped (`--color`, `NO_COLOR`)
 - [x] Decide whether concurrent writes need locking — **decided: no.** Writes
       are atomic, but load-modify-save isn't; two overlapping `done` runs can
       lose one. Locking portably is fiddly, and the cost of the rare loss is
