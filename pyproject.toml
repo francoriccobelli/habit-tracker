@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "habit-tracker"
-version = "0.3.0"
+version = "1.0.0"
 description = "A small command-line habit tracker, built while learning Claude Code."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -13,7 +13,7 @@ license-files = ["LICENSE"]
 authors = [{ name = "Franco Riccobelli" }]
 keywords = ["cli", "habits", "tracker"]
 classifiers = [
-    "Development Status :: 2 - Pre-Alpha",
+    "Development Status :: 5 - Production/Stable",
     "Environment :: Console",
     "Intended Audience :: End Users/Desktop",
     "Programming Language :: Python :: 3",

@@ -4,9 +4,9 @@
 
 A small command-line habit tracker, built while learning Claude Code.
 
-> **Status: working.** All seven commands are implemented and tested against
-> a real data file. `list` shows current streaks; `stats` shows one habit's
-> full record.
+> **Status: 1.0.** All seven commands are implemented and tested against a
+> real data file, and every roadmap item below is closed. `list` shows current
+> streaks; `stats` shows one habit's full record.
 
 ## Requirements
 
@@ -40,6 +40,7 @@ habit-tracker undone read        # take back today's completion
 habit-tracker stats read         # one habit's full record
 habit-tracker history read       # which days you actually did it
 habit-tracker remove read        # stop tracking, discard history
+habit-tracker --version          # print the installed version
 ```
 
 `undone` is the inverse of `done` and takes the same `--date`. It's how you fix

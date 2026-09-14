@@ -9,6 +9,6 @@ The package is deliberately thin:
 Nothing else should read or write the data file directly.
 """
 
-__version__ = "0.3.0"
+__version__ = "1.0.0"
 
 __all__ = ["__version__"]
