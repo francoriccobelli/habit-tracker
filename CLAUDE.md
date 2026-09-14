@@ -109,6 +109,40 @@ Conventions that follow from that split:
   lengthen a string without widening it, so padding a painted cell silently
   breaks column alignment.
 
+## Code style
+
+There is no formatter and no linter configured, on purpose — the same reason
+there are no runtime dependencies. That makes these conventions hand-held, so
+match the file you are in rather than assuming a tool will fix it after.
+
+- **Annotate every signature**, including `-> None` and including test
+  methods. Every module under `habit_tracker/` that annotates opens with
+  `from __future__ import annotations`; `__init__.py` does not, because it
+  annotates nothing.
+- **Docstring every module, class, and function** — private helpers included.
+  Google style: `Args:` / `Returns:` / `Raises:` when there is something to
+  say, one line when there is not. Document the *reasoning*, not the
+  signature: `current_streak` spends its docstring on why a streak survives a
+  not-yet-done today, which is the part a reader cannot infer.
+- **Cross-reference with reST roles** — `:func:`, `:mod:`, `:class:`,
+  `:data:` — and ``double backticks`` for literals. This is what the existing
+  docstrings use; do not mix in Markdown backticks beside them.
+- **Module constants get `#:` comments** above them, as `DATA_FILE` and
+  `SCHEMA_VERSION` do.
+- **Comments explain why, never what.** Every comment in the codebase earns
+  its place by recording a decision or a hazard — why the temp file shares a
+  directory with its target, why an empty env value counts as unset. A
+  comment restating the line below it is noise.
+- **Wrap at 79 columns, 88 is the hard ceiling.** Package code holds to this
+  almost everywhere; tests run a little wider where a long assertion reads
+  better unbroken.
+- **Python source is pure ASCII.** Use `--` in docstrings and comments where
+  prose would take an em dash. Markdown files (this one, the README) use real
+  em dashes — the restriction is for `.py` files only, and it is currently
+  exact: not one non-ASCII byte in the package or the suite.
+- **Private helpers take a leading underscore** (`_iso_day`, `_window`,
+  `_paint`), and stay out of `__all__`.
+
 ## Testing: the one rule
 
 **Any test that reaches storage must detach from the real data file first** —
@@ -135,6 +169,26 @@ must pass, and must not create that file:
 ```bash
 HABIT_TRACKER_DATA=/tmp/canary.json python -m unittest discover -s tests
 ```
+
+Beyond that one rule, four conventions the suite already holds to:
+
+- **Write `unittest`, never `pytest`-only features.** The suite is stdlib
+  `unittest` so it runs with nothing installed — CI's first job proves that by
+  running it in a bare environment. `pytest` is a convenience runner over the
+  same tests, not a dependency they may reach for. There is not one `import
+  pytest` in `tests/`, and adding one would break that job.
+- **Inject time, never freeze the clock.** `current_streak`, `tracked_days`
+  and `tracked_since` all take `today: date | None = None` precisely so a test
+  can pass a fixed date instead of patching `date.today`. A new helper that
+  cares what day it is takes the same parameter.
+- **Mock the boundary, nothing else.** `mock` appears only to redirect
+  `storage.DATA_FILE`, to sandbox `os.environ`, and to force the Windows
+  VT-mode probe in `test_render.py`. There are no network calls and no
+  external services to stub, and the pure helpers need no test doubles at all
+  — if a new test wants one, that is usually a sign the logic belongs in
+  `storage.py` as a pure function instead.
+- **Assert on what landed on disk**, not only on printed output — see
+  *Writing a new command* below.
 
 ## Data format
 
@@ -168,3 +222,32 @@ uses `X | None` annotations and `from __future__ import annotations`).
 Habit names match case-insensitively everywhere, and messages echo the
 *stored* spelling rather than what the user typed — so `add Read` then
 `done read` reports "Read".
+
+## Commits
+
+The log is part of the documentation here — several decisions in this project
+live in a commit body and nowhere else. Match it.
+
+- **Subject: imperative mood, capitalised, no full stop, 50 characters or
+  fewer.** "Add a stats command and fix message pluralization", not "Added" or
+  "Adds". Every subject in the log so far is between 25 and 51 characters.
+- **Wrap the body at 72 columns**, blank line after the subject.
+- **The body explains why, and what was rejected.** This is the part that
+  matters. A commit that adds a feature says what the alternative was and why
+  it lost — the stats commit explains why the rate window spans backdated
+  completions rather than running from `created`, because a reader would
+  otherwise assume the simpler thing was an oversight.
+- **Name the test that pins a behaviour** when one does, as
+  `test_done_rejects_an_unparseable_date` is named in the `undone` commit. It
+  tells the next reader where the guarantee is enforced.
+- **Say what is unproven.** The CI commit states outright that the workflow
+  had not run yet and that the 3.14 job was unverified against the runners.
+  Do not let a commit body imply more confidence than the work earned.
+- **One logical change per commit**, with the caveat the log already shows: a
+  version bump or a docs update may ride along with the change that motivated
+  it ("Add an undone command and CI, and bump to 0.2.0"). Unrelated changes
+  still get their own commit.
+- **End with the `Co-Authored-By:` trailer** when Claude wrote part of it.
+
+Never commit anything from `~/.habit_tracker/` — user data lives outside the
+repo specifically so it cannot land in a commit.
