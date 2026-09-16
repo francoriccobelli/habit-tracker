@@ -14,8 +14,12 @@ CI lives in `.github/workflows/ci.yml` (Python 3.10–3.14 on Ubuntu, plus a
 Windows job). It runs the suite twice — once with nothing installed, to keep
 the stdlib-only promise honest — and re-runs it with `HABIT_TRACKER_DATA` set,
 failing if the suite writes to that path. It also smoke-tests the installed
-console script, which no unit test reaches. `main` has been pushed, so check
-the Actions tab rather than assuming green.
+console script, which no unit test reaches. A run's result is not visible from
+inside a session — check the Actions tab rather than assuming green.
+
+`v1.0.0` is tagged and on the remote. Tags are annotated (`git tag -a`, never
+lightweight) and named `vX.Y.Z`; match that. The tag message is a short release
+summary, not just the version — see `git tag -n99 v1.0.0`.
 
 **Known limitation, accepted and closed: no write locking.** `save_habits` is
 atomic — it writes a temp file and `os.replace`s it, so an interrupted write
